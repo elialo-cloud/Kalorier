@@ -3,8 +3,6 @@
   const input = $('#foodSearch'), results = $('#results'), hint = $('#searchHint'), amountArea = $('#amountArea'), selectedFood = $('#selectedFood'), amount = $('#amount'), saveFood = $('#saveFood');
   if (!input || !results) return;
 
-  // Small, deliberate Swedish food alias dictionary. Aliases are ranking hints,
-  // never hard filters, so a normal food can still beat a recipe/product.
   const ALIASES = {
     agg:['agg','honsagg'], honsagg:['agg','honsagg'], gradde:['gradde','vispgradde','matlagningsgradde','kaffegradde'], vispgradde:['gradde','vispgradde'],
     potatis:['potatis'], kyckling:['kyckling','kycklingfile'], kycklingfile:['kyckling','kycklingfile'], not:['not','notter'], notter:['not','notter'],
@@ -22,9 +20,7 @@
   function queryVariants(q){
     const out=[q], tokens=norm(q).split(' ').filter(Boolean);
     for(const token of tokens) for(const alias of (ALIASES[token]||[])) if(!out.includes(alias)) out.push(alias);
-    // Handles common missing-last-letter mistakes: "risp" -> "ris".
     if(q.length>=4) out.push(q.slice(0,-1));
-    // Handles adjacent-letter typos: "rsi" -> "ris".
     for(let i=0;i<q.length-1&&out.length<8;i++){const a=q.split('');[a[i],a[i+1]]=[a[i+1],a[i]];const v=a.join('');if(v!==q&&!out.includes(v))out.push(v)}
     return [...new Set(out)].slice(0,8);
   }
@@ -55,10 +51,45 @@
     return s;
   }
 
+  // Fallback knowledge layer. This is deliberately conservative: it only creates
+  // an AI-style suggestion when the real databases did not produce a strong hit.
+  // Nutrition values are fixed reference values per 100 g, not invented per request.
+  const SMART_FOODS = [
+    {keys:['kokt agg','kokt honsagg','hardkokt agg','stekt agg'],name:'Ägg, kokt',kcal:143,protein:12.6,carbs:.7,fat:9.5},
+    {keys:['agg','honsagg'],name:'Ägg, hönsägg',kcal:143,protein:12.6,carbs:.7,fat:9.5},
+    {keys:['banan','banan utan skal'],name:'Banan, utan skal',kcal:89,protein:1.1,carbs:22.8,fat:.3},
+    {keys:['kokt ris','ris kokt'],name:'Ris, kokt',kcal:130,protein:2.7,carbs:28.2,fat:.3},
+    {keys:['kokt potatis','potatis kokt'],name:'Potatis, kokt',kcal:80,protein:1.8,carbs:17,fat:.1},
+    {keys:['kycklingfile','kyckling file','kokt kyckling','stekt kyckling'],name:'Kycklingfilé, tillagad',kcal:165,protein:31,carbs:0,fat:3.6},
+    {keys:['havregryn','havre'],name:'Havregryn',kcal:360,protein:13.3,carbs:57,fat:6.5},
+    {keys:['mjolk','standardmjolk'],name:'Mjölk, standard',kcal:60,protein:3.5,carbs:4.8,fat:3.0},
+    {keys:['vispgradde','gradde'],name:'Vispgrädde',kcal:360,protein:2.1,carbs:3.0,fat:38},
+    {keys:['kvarg','skyr'],name:'Kvarg, naturell',kcal:65,protein:11,carbs:4,fat:.2}
+  ];
+  function smartSuggestion(query, ranked){
+    if(ranked.length && ranked[0]._score>=1700)return null;
+    const q=norm(query), tokens=q.split(' ').filter(Boolean);
+    let best=null,bestScore=-1;
+    for(const food of SMART_FOODS){
+      for(const key of food.keys){
+        const kt=key.split(' '), matched=tokens.filter(t=>kt.some(k=>k===t||k.startsWith(t)||lev(t,k)<=1)).length;
+        const prep=tokens.filter(t=>['kokt','stekt','grillad','tillagad','hardkokt'].includes(t)).length;
+        let s=matched*500+(q.includes(key)?700:0)+(prep&&key.includes('kokt')?250:0);
+        if(matched===tokens.length&&matched>0&&s>bestScore){bestScore=s;best=food}
+      }
+    }
+    if(!best)return null;
+    return {...best,id:`ai:${norm(best.name)}`,source:'ai',_score:bestScore};
+  }
+
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const badge=item=>{const livs=item.source!=='openfoodfacts';return `<span class="search-badge ${livs?'search-badge-livs':'search-badge-off'}">${livs?'LIVS':'OFF'}</span>`};
-  function render(items){results.innerHTML=items.length?items.map((f,i)=>`<button type="button" class="result" data-i="${i}"><div class="result-main"><strong>${esc(f.name)}</strong>${badge(f)}</div><small>${f.brand?esc(f.brand)+' · ':''}${Math.round(Number(f.kcal)||0)} kcal · ${(Number(f.protein)||0).toLocaleString('sv-SE',{maximumFractionDigits:1})} g protein / 100 g</small></button>`).join(''):'<div class="empty">Inga relevanta resultat hittades.</div>';results.querySelectorAll('.result').forEach(b=>b.onclick=()=>choose(items[+b.dataset.i]))}
-  function choose(food){window.__kalorierSelectedFood=food;amountArea.hidden=false;selectedFood.innerHTML=`<strong>${esc(food.name)}</strong><small>${Math.round(Number(food.kcal)||0)} kcal per 100 g · ${food.source==='openfoodfacts'?'OFF':'LIVS'}${food.brand?' · '+esc(food.brand):''}</small>`;requestAnimationFrame(()=>{amount.focus();amount.select()})}
+  const badge=item=>{let cls='search-badge-livs',label='LIVS';if(item.source==='openfoodfacts'){cls='search-badge-off';label='OFF'}else if(item.source==='ai'){cls='search-badge-ai';label='AI'}return `<span class="search-badge ${cls}">${label}</span>`};
+  function render(items,aiItem=null){
+    const list=aiItem?[...items,aiItem]:items;
+    results.innerHTML=list.length?list.map((f,i)=>`<button type="button" class="result" data-i="${i}"><div class="result-main"><strong>${esc(f.name)}</strong>${badge(f)}</div><small>${f.brand?esc(f.brand)+' · ':''}${Math.round(Number(f.kcal)||0)} kcal · ${(Number(f.protein)||0).toLocaleString('sv-SE',{maximumFractionDigits:1})} g protein / 100 g${f.source==='ai'?' · Smart uppskattning från referensvärde':''}</small></button>`).join(''):'<div class="empty">Inga relevanta resultat hittades.</div>';
+    results.querySelectorAll('.result').forEach(b=>b.onclick=()=>choose(list[+b.dataset.i]));
+  }
+  function choose(food){window.__kalorierSelectedFood=food;amountArea.hidden=false;selectedFood.innerHTML=`<strong>${esc(food.name)}</strong><small>${Math.round(Number(food.kcal)||0)} kcal per 100 g · ${food.source==='openfoodfacts'?'OFF':food.source==='ai'?'AI':'LIVS'}${food.brand?' · '+esc(food.brand):''}</small>`;requestAnimationFrame(()=>{amount.focus();amount.select()})}
 
   async function search(q){
     const raw=String(q||'').replace(/\s+/g,' ').trim(); if(raw.length<2){hint.textContent='Skriv vad du åt – vi söker överallt.';render([]);return}
@@ -67,8 +98,10 @@
       const variants=queryVariants(raw),all=[];
       for(const v of variants){const [a,b]=await Promise.all([fetch(`/api/foods?q=${encodeURIComponent(v)}&fuzzy=1`),fetch(`/api/products?q=${encodeURIComponent(v)}`)]);if(a.ok){const x=await a.json();if(Array.isArray(x))all.push(...x)}if(b.ok){const x=await b.json();if(Array.isArray(x))all.push(...x)}}
       if(search._request!==request)return;
-      const seen=new Set(),ranked=all.filter(x=>{const k=`${x.source||'livs'}:${x.id||norm(x.name)}`;if(seen.has(k))return false;seen.add(k);return true}).map(x=>({...x,_score:Math.max(...variants.map(v=>score(x,v)))})).filter(x=>x._score>0).sort((a,b)=>b._score-a._score).slice(0,50);
-      render(ranked);hint.textContent=ranked.length?`${ranked.length} relevanta resultat`:'Inga relevanta resultat.';
+      const seen=new Set(),ranked=all.filter(x=>{const k=`${x.source||'livs'}:${x.id||norm(x.name)}`;if(seen.has(k))return false;seen.add(k);return true}).map(x=>({...x,_score:Math.max(...variants.map(v=>score(x,v)))})).filter(x=>x._score>0).sort((a,b)=>b._score-a._score);
+      const ai=smartSuggestion(raw,ranked);
+      render(ranked.slice(0,49),ai);
+      hint.textContent=ranked.length?(ai?`${Math.min(49,ranked.length)} relevanta + AI-förslag`:`${Math.min(50,ranked.length)} relevanta resultat`):(ai?'AI-förslag':'Inga relevanta resultat.');
     }catch{if(search._request===request){hint.textContent='Kunde inte läsa databaserna.';render([])}}
   }
 
@@ -78,5 +111,5 @@
   const close=()=>{$('#searchView').classList.remove('open');$('#searchView').setAttribute('aria-hidden','true');document.body.style.overflow='';window.__kalorierSelectedFood=null};
   $('#addFood').onclick=()=>open('');$('#closeSearch').onclick=close;document.querySelectorAll('.quick button').forEach(b=>b.onclick=()=>open(b.dataset.q));
   saveFood.onclick=async()=>{const food=window.__kalorierSelectedFood,grams=Number(amount.value);if(!food||!(grams>0))return;const f=grams/100,body={date:new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10),time:new Date().toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'}),name:food.name,source:food.source||'livsmedelsverket',product_id:food.id||null,barcode:food.barcode||null,grams,kcal:(food.kcal||0)*f,protein:(food.protein||0)*f,carbs:(food.carbs||0)*f,fat:(food.fat||0)*f};const r=await fetch('/api/diary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){bumpUsage(food);close();location.reload()}else alert('Kunde inte spara maten.')};
-  const style=document.createElement('style');style.textContent=`.result-main{display:flex;align-items:center;gap:8px}.search-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}.search-badge-livs{background:#ecebe6;color:#3d3d39}.search-badge-off{background:#181818;color:#fff}`;document.head.appendChild(style);
+  const style=document.createElement('style');style.textContent=`.result-main{display:flex;align-items:center;gap:8px}.search-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}.search-badge-livs{background:#ecebe6;color:#3d3d39}.search-badge-off{background:#181818;color:#fff}.search-badge-ai{background:#e7ddff;color:#5b3b9c}`;document.head.appendChild(style);
 })();
