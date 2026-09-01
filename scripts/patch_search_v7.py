@@ -60,8 +60,7 @@ new_score = r'''function searchScore(item,q){
 }'''
 
 s, n = re.subn(r'function searchScore\(item,q\)\{.*?\n\}\n\n\n/\* ---------------------------------------------------------\n   API', new_score+'\n\n\n/* ---------------------------------------------------------\n   API', s, count=1, flags=re.S)
-if n != 1:
-    raise SystemExit('searchScore block not found')
+if n != 1: raise SystemExit('searchScore block not found')
 
 new_render = r'''function renderResults(items){
   const r=$('#results');
@@ -82,16 +81,9 @@ new_render = r'''function renderResults(items){
   });
 }'''
 s, n = re.subn(r'function renderResults\(items\)\{.*?\n\}\n\n\n/\* =========================================================\n   SÖKMOTOR V6', new_render+'\n\n\n/* =========================================================\n   SÖKMOTOR V7', s, count=1, flags=re.S)
-if n != 1:
-    raise SystemExit('renderResults block not found')
+if n != 1: raise SystemExit('renderResults block not found')
 
-old = '''function searchVariants(q){
-  const n=norm(q);
-  const out=new Set([n]);
-  aliasTerms(n).forEach(x=>out.add(x));
-  return [...out]
-}'''
-new = '''function searchVariants(q){
+new_variants = r'''function searchVariants(q){
   const n=norm(q);
   if(!n)return [];
   const qt=tokens(n);
@@ -100,15 +92,13 @@ new = '''function searchVariants(q){
   aliasTerms(n).forEach(x=>out.add(x));
   return [...out]
 }'''
-if old not in s:
-    raise SystemExit('searchVariants block not found')
-s = s.replace(old, new, 1)
+s, n = re.subn(r'function searchVariants\(q\)\{.*?\n\}', new_variants, s, count=1, flags=re.S)
+if n != 1: raise SystemExit('searchVariants block not found')
+
 s = s.replace("final=\n      final.slice(0,50);", "final=\n      final.slice(0,100);", 1)
 marker = "    renderResults(final);"
 replacement = "    final=final.filter(x=>x.source==='ai'||Number.isFinite(searchScore(x,raw)));\n\n    renderResults(final);"
-if marker not in s:
-    raise SystemExit('render marker not found')
+if marker not in s: raise SystemExit('render marker not found')
 s = s.replace(marker, replacement, 1)
-
 p.write_text(s, encoding='utf-8')
 print('patched')
