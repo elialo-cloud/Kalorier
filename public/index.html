@@ -13,38 +13,23 @@
       <div><span class="eyebrow">KALORIER</span><h1>Idag</h1></div>
       <button class="icon-button" aria-label="Inställningar">⚙</button>
     </header>
-
-    <section class="summary">
-      <div class="ring" id="calorieRing"><span><strong id="calories">0</strong><small>/ 2200 kcal</small></span></div>
-      <div class="remaining"><span>Kvar idag</span><strong id="remaining">2 200 kcal</strong></div>
-    </section>
-
+    <section class="summary"><div class="ring" id="calorieRing"><span><strong id="calories">0</strong><small>/ 2200 kcal</small></span></div><div class="remaining"><span>Kvar idag</span><strong id="remaining">2 200 kcal</strong></div></section>
     <section class="macros">
       <div><span>Protein</span><strong id="protein">0 / 160 g</strong><div class="bar"><i id="proteinBar"></i></div></div>
       <div><span>Kolhydrater</span><strong id="carbs">0 / 220 g</strong><div class="bar"><i id="carbsBar"></i></div></div>
       <div><span>Fett</span><strong id="fat">0 / 70 g</strong><div class="bar"><i id="fatBar"></i></div></div>
     </section>
-
-    <section class="meals">
-      <div class="section-title"><h2>Dagens mat</h2><span id="mealCount">0 kcal</span></div>
-      <div id="foodList" class="food-list"><div class="empty">Inget registrerat ännu.</div></div>
-    </section>
-
+    <section class="meals"><div class="section-title"><h2>Dagens mat</h2><span id="mealCount">0 kcal</span></div><div id="foodList" class="food-list"><div class="empty">Inget registrerat ännu.</div></div></section>
     <button class="add" id="addFood">＋ Lägg till mat</button>
     <button class="add" id="scanBarcode">▣ Skanna streckkod</button>
-
-    <section class="quick">
-      <button>🥚 Ägg</button><button>🍌 Banan</button><button>🍚 Ris</button><button>🍗 Kyckling</button>
-    </section>
+    <section class="quick"><button>🥚 Ägg</button><button>🍌 Banan</button><button>🍚 Ris</button><button>🍗 Kyckling</button></section>
   </main>
 
   <dialog id="foodDialog">
     <form method="dialog" id="foodForm">
       <button class="close" value="cancel" aria-label="Stäng">×</button>
-      <span class="eyebrow">LÄGG TILL</span>
-      <h2>Vad åt du?</h2>
-      <label>Sök mat eller produkt<input id="foodSearch" autocomplete="off" placeholder="t.ex. banan eller Coca-Cola" /></label>
-      <div class="search-tabs"><button type="button" id="foodTab" class="active">Livsmedel</button><button type="button" id="productTab">Produkter</button></div>
+      <span class="eyebrow">LÄGG TILL</span><h2>Vad åt du?</h2>
+      <label>Sök mat eller produkt<input id="foodSearch" autocomplete="off" placeholder="t.ex. banan, Keso eller Coca-Cola" /></label>
       <div id="results" class="results"></div>
       <div id="amountArea" class="amount-area" hidden>
         <label>Mängd (gram)<input id="amount" type="number" min="0" step="1" value="100" /></label>
@@ -57,15 +42,15 @@
   <dialog id="scannerDialog">
     <div class="scanner">
       <button class="close" id="closeScanner" aria-label="Stäng">×</button>
-      <span class="eyebrow">STRECKKOD</span>
-      <h2>Skanna produkt</h2>
-      <video id="scannerVideo" autoplay muted playsinline></video>
+      <span class="eyebrow">STRECKKOD</span><h2>Skanna produkt</h2>
+      <div id="scannerReader"></div>
       <div id="scannerStatus" class="empty">Startar kameran…</div>
       <label>Skriv streckkod manuellt<input id="manualBarcode" inputmode="numeric" autocomplete="off" placeholder="t.ex. 7310865004701" /></label>
       <button type="button" class="primary" id="manualScan">Sök produkt</button>
     </div>
   </dialog>
 
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
