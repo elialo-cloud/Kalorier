@@ -1,0 +1,386 @@
+name: Rehaul search engine
+on:
+  push:
+    paths:
+      - '.github/workflows/rehault-search.yml'
+permissions:
+  contents: write
+jobs:
+  rehaul:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace search engine
+        env:
+          FILE: public/app.js
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('public/app.js')
+          s = p.read_text(encoding='utf-8')
+          start = s.index('/* =========================================================\n   SÖKMOTOR V6')
+          end = s.index('/* =========================================================\n   RESTEN AV APPEN — OFÖRÄNDRAD', start)
+
+          new = r'''/* =========================================================
+   SÖKMOTOR V7 — LIFESUM-LIK
+   1. Online AI-förslag först
+   2. Livsmedelsverket + OFF
+   3. Smart ranking, aliases, fuzzy + cache
+   4. Lokal AI-fallback om online-AI misslyckas
+========================================================= */
+
+const SEARCH_CACHE=new Map();
+const AI_CACHE=new Map();
+let aiController=null;
+let aiRequestId=0;
+
+const SEARCH_ALIASES=[
+  ['ägg',['agg','ägg','honsagg','hönsägg','kokt ägg','kokt agg','stekt ägg','stekt agg','hårdkokt ägg','hardkokt agg']],
+  ['grädde',['gradd','grädde','vispgrädde','vispgradd','matgrädde','matgradd']],
+  ['mjölk',['mjolk','mjölk','standardmjölk','standardmjolk','mellanmjölk','mellanmjolk','lättmjölk','lattmjolk']],
+  ['kyckling',['kyckling','kycklingfilé','kycklingfile','kycklingbröst','kycklingbrost','kycklinglår','kycklinglar']],
+  ['ris',['ris','kokt ris','ris kokt','jasminris','basmatiris']],
+  ['potatis',['potatis','kokt potatis','potatis kokt','potatisplätt','potatisplatt','raggmunk']],
+  ['bröd',['bröd','brod','franska','limpa','fullkornsbröd','fullkornsbrod','knäckebröd','knackebrod']],
+  ['köttfärs',['köttfärs','kottfars','nötfärs','notfars','nötköttfärs','notkottfars']],
+  ['yoghurt',['yoghurt','grekisk yoghurt','turkisk yoghurt']],
+  ['kvarg',['kvarg','skyr','proteinpudding']],
+  ['coca cola zero',['coca cola zero','coca-cola zero','cola zero','coke zero','coke zero sugar','coke zero sugar']],
+  ['coca cola',['coca cola','coca-cola','cola','coke']],
+  ['banan',['banan','banana']],
+  ['äpple',['äpple','apple']],
+  ['havregryn',['havregryn','havregrynsgröt','havregryns grot']],
+  ['pasta',['pasta','makaroner','spaghetti','spagetti','penne']],
+  ['tonfisk',['tonfisk','tuna']],
+  ['lax',['lax','salmon']],
+  ['avokado',['avokado','avocado']],
+  ['ost',['ost','cheese']],
+  ['smör',['smör','smor','butter']],
+  ['olja',['olja','olivolja','rapsolja']],
+  ['nötter',['nötter','notter','mandel','cashew','cashewnötter','jordnötter']],
+  ['proteinpulver',['proteinpulver','whey','whey protein','protein powder']]
+];
+
+function norm(s){
+  return String(s||'')
+    .toLocaleLowerCase('sv-SE')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/gi,' ')
+    .replace(/\s+/g,' ')
+    .trim()
+}
+
+function tokens(s){return norm(s).split(' ').filter(Boolean)}
+
+function levenshtein(a,b){
+  if(a===b)return 0;
+  if(!a||!b)return Math.max(a.length,b.length);
+  const prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){
+    const cur=[i];
+    for(let j=1;j<=b.length;j++)cur[j]=Math.min(cur[j-1]+1,prev[j]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    for(let j=0;j<cur.length;j++)prev[j]=cur[j];
+  }
+  return prev[b.length]
+}
+
+function similarity(a,b){
+  a=norm(a);b=norm(b);
+  if(!a||!b)return 0;
+  if(a===b)return 1;
+  if(a.includes(b)||b.includes(a))return Math.min(a.length,b.length)/Math.max(a.length,b.length);
+  return Math.max(0,1-levenshtein(a,b)/Math.max(a.length,b.length))
+}
+
+function searchVariants(q){
+  const n=norm(q),out=new Set([n]);
+  for(const [canonical,aliases] of SEARCH_ALIASES){
+    const all=[canonical,...aliases].map(norm);
+    if(all.some(x=>x===n||x.includes(n)||n.includes(x)))all.forEach(x=>out.add(x));
+  }
+  return [...out]
+}
+
+function tokenScore(token,nameTokens){
+  let best=0;
+  for(const n of nameTokens){
+    if(n===token)best=Math.max(best,1);
+    else if(n.startsWith(token)||token.startsWith(n))best=Math.max(best,.93);
+    else if(token.length>=4)best=Math.max(best,similarity(token,n));
+  }
+  return best
+}
+
+function searchScore(item,q){
+  const query=norm(q),name=norm(item.name),brand=norm(item.brand);
+  if(!query||!name)return -Infinity;
+  const qt=tokens(query),nt=tokens(name),bt=tokens(brand);
+  let score=0,matched=0;
+
+  if(name===query)score+=12000;
+  if(name.startsWith(query))score+=5000;
+  if(name.includes(` ${query}`))score+=3300;
+  if(name.includes(query))score+=1800;
+  if(brand===query)score+=2800;
+  if(brand.includes(query))score+=900;
+
+  for(const token of qt){
+    const ts=tokenScore(token,nt);
+    const bs=tokenScore(token,bt)*.65;
+    const best=Math.max(ts,bs);
+    if(best>=.72){matched++;score+=best>=.99?1900:best>=.9?1150:520*best;}
+  }
+
+  if(qt.length>1){
+    if(matched===qt.length)score+=2800;
+    else if(matched===qt.length-1)score-=700;
+    else return -Infinity;
+  }else if(matched===0){
+    return -Infinity;
+  }
+
+  const first=qt[0],pos=nt.indexOf(first);
+  if(pos===0)score+=850;
+  else if(pos>0&&pos<3)score+=220;
+
+  score-=Math.max(0,nt.length-qt.length)*32;
+
+  if(qt.length===1&&/\b(hemgjord|hemlagad|recept|sås|sauce|gryta)\b/.test(name)&&!name.startsWith(query))score-=750;
+  if(item.verified)score+=150;
+  if(item.source==='openfoodfacts'&&brand)score+=60;
+
+  return score
+}
+
+async function fetchSearchEndpoint(path,variant){
+  const key=`${path}|${variant}`;
+  if(SEARCH_CACHE.has(key))return SEARCH_CACHE.get(key);
+  try{
+    const r=await fetch(`${path}?q=${encodeURIComponent(variant)}`);
+    if(!r.ok)return [];
+    const data=await r.json();
+    const result=Array.isArray(data)?data:[];
+    SEARCH_CACHE.set(key,result);
+    if(SEARCH_CACHE.size>200)SEARCH_CACHE.delete(SEARCH_CACHE.keys().next().value);
+    return result;
+  }catch{return []}
+}
+
+/* =========================================================
+   ONLINE AI — första sökresultatet
+   Vireonix är en gratis OpenAI-kompatibel endpoint utan API-nyckel.
+   AI:n får endast skapa ett tydligt märkt NÄRINGS-ESTIMAT.
+========================================================= */
+
+function cleanJsonText(text){
+  const raw=String(text||'').trim();
+  const fenced=raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate=fenced?fenced[1]:raw;
+  const start=candidate.indexOf('{');
+  const end=candidate.lastIndexOf('}');
+  if(start<0||end<=start)return null;
+  try{return JSON.parse(candidate.slice(start,end+1))}catch{return null}
+}
+
+function validAiFood(x){
+  if(!x||typeof x!=='object'||!x.name)return null;
+  const kcal=Number(x.kcal),protein=Number(x.protein),carbs=Number(x.carbs),fat=Number(x.fat);
+  if(!Number.isFinite(kcal)||kcal<0||kcal>1000)return null;
+  if(!Number.isFinite(protein)||protein<0||protein>100)return null;
+  if(!Number.isFinite(carbs)||carbs<0||carbs>100)return null;
+  if(!Number.isFinite(fat)||fat<0||fat>100)return null;
+  return {
+    id:`ai-online:${norm(x.name).replace(/ /g,'-')}`,
+    source:'ai',
+    aiProvider:'Vireonix',
+    verified:0,
+    name:String(x.name).slice(0,120),
+    kcal:Math.round(kcal*10)/10,
+    protein:Math.round(protein*10)/10,
+    carbs:Math.round(carbs*10)/10,
+    fat:Math.round(fat*10)/10,
+    aiOnline:true
+  }
+}
+
+async function onlineAiCandidate(query,requestId){
+  const q=String(query||'').trim();
+  if(q.length<2)return null;
+  const cacheKey=norm(q);
+  if(AI_CACHE.has(cacheKey))return AI_CACHE.get(cacheKey);
+
+  if(aiController)aiController.abort();
+  aiController=new AbortController();
+  const timeout=setTimeout(()=>aiController?.abort(),2600);
+
+  try{
+    const prompt=[
+      'You are the nutrition search assistant inside a Swedish calorie tracking app.',
+      'Identify the food the user is searching for and estimate nutrition per 100 g.',
+      'Prefer the most common Swedish interpretation. If it is a branded product, keep the brand.',
+      'Do not invent a recipe when the query is a simple food.',
+      'Return ONLY valid JSON with exactly these keys: name, kcal, protein, carbs, fat.',
+      'All nutrition values are per 100 g. kcal is kcal, all other values are grams.',
+      `User search: ${q}`
+    ].join('\n');
+
+    const r=await fetch('https://vireonix.ai/v1/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      signal:aiController.signal,
+      body:JSON.stringify({
+        model:'auto',
+        temperature:0.1,
+        max_tokens:180,
+        messages:[
+          {role:'system',content:'Answer only with compact JSON. No markdown. Never claim verified database values.'},
+          {role:'user',content:prompt}
+        ]
+      })
+    });
+
+    if(!r.ok)throw new Error(`AI ${r.status}`);
+    const data=await r.json();
+    if(requestId!==searchAll._request)return null;
+    const text=data?.choices?.[0]?.message?.content||'';
+    const food=validAiFood(cleanJsonText(text));
+    if(food)AI_CACHE.set(cacheKey,food);
+    return food;
+  }catch(e){
+    if(e?.name!=='AbortError')console.debug('Online AI unavailable',e);
+    return null;
+  }finally{
+    clearTimeout(timeout);
+  }
+}
+
+/* Lokal fallback — används om online-AI inte svarar. */
+const AI_FOODS=[
+  {match:['kokt ägg','kokt agg','hårdkokt ägg','hardkokt agg','ägg'],name:'Kokt ägg',kcal:155,protein:12.6,carbs:1.1,fat:10.6},
+  {match:['stekt ägg','stekt agg'],name:'Stekt ägg',kcal:196,protein:13.6,carbs:.8,fat:14.8},
+  {match:['kyckling','kycklingfilé','kycklingfile','kycklingbröst','kycklingbrost'],name:'Kycklingfilé, tillagad',kcal:165,protein:31,carbs:0,fat:3.6},
+  {match:['kokt ris','ris','jasminris','basmatiris'],name:'Kokt ris',kcal:130,protein:2.7,carbs:28.2,fat:.3},
+  {match:['kokt potatis','potatis'],name:'Kokt potatis',kcal:87,protein:1.9,carbs:20.1,fat:.1},
+  {match:['havregryn','havregrynsgröt'],name:'Havregrynsgröt med vatten',kcal:68,protein:2.4,carbs:11.7,fat:1.4},
+  {match:['pannkaka','pannkakor'],name:'Pannkaka, klassisk',kcal:190,protein:6.1,carbs:22.7,fat:8.7},
+  {match:['tacos','taco','tacofärs','tacofars'],name:'Tacos med nötfärs, uppskattat',kcal:190,protein:12,carbs:12,fat:10},
+  {match:['kyckling med ris','kyckling ris'],name:'Kyckling med ris, uppskattat',kcal:150,protein:13,carbs:18,fat:3.5},
+  {match:['proteinshake','protein shake'],name:'Proteinshake, uppskattat',kcal:120,protein:24,carbs:4,fat:2},
+  {match:['smörgås','macka','smorgas'],name:'Smörgås, uppskattat',kcal:220,protein:8,carbs:28,fat:8}
+];
+
+function localAiCandidate(q){
+  const n=norm(q),qt=tokens(n);
+  if(!n)return null;
+  let best=null,bestScore=0;
+  for(const food of AI_FOODS){
+    for(const phrase of food.match){
+      const pt=tokens(phrase);
+      let score=similarity(n,phrase)*100,matched=0;
+      for(const t of qt){
+        const s=Math.max(...pt.map(x=>x===t?1:x.startsWith(t)||t.startsWith(x)?.9:similarity(t,x)));
+        if(s>=.72)matched++;
+        score+=s*25;
+      }
+      if(matched===qt.length)score+=55;
+      if(score>bestScore){bestScore=score;best=food;}
+    }
+  }
+  if(!best||bestScore<80)return null;
+  return validAiFood(best);
+}
+
+async function searchAll(q=''){
+  const raw=String(q).replace(/\s+/g,' ').trim();
+  if(raw.length<2){
+    if(aiController)aiController.abort();
+    $('#searchHint').textContent='Skriv vad du åt – vi söker överallt.';
+    renderResults([]);
+    return;
+  }
+
+  const request=Symbol();
+  searchAll._request=request;
+  const vs=searchVariants(raw);
+  $('#searchHint').textContent='🧠 AI + Livsmedelsverket + OFF…';
+
+  /* AI och databaser startar samtidigt. AI får första platsen när den svarar. */
+  const aiPromise=onlineAiCandidate(raw,request);
+  const dbPromise=Promise.all(vs.map(v=>Promise.all([
+    fetchSearchEndpoint('/api/foods',v),
+    fetchSearchEndpoint('/api/products',v)
+  ]))).then(batches=>batches.flat(2));
+
+  let ai=null;
+  let all=[];
+
+  try{
+    ai=await aiPromise;
+    if(searchAll._request!==request)return;
+  }catch{}
+
+  /* Visa online-AI direkt, innan databasen är färdig. */
+  if(ai){
+    renderResults([ai]);
+    $('#searchHint').textContent='🧠 Online AI-förslag · söker databaser…';
+  }
+
+  try{
+    all=await dbPromise;
+    if(searchAll._request!==request)return;
+  }catch{all=[]}
+
+  const seen=new Set();
+  const ranked=all
+    .filter(x=>x&&x.name)
+    .filter(x=>{
+      const key=`${x.source||''}|${x.id||''}|${norm(x.name)}|${norm(x.brand||'')}`;
+      if(seen.has(key))return false;
+      seen.add(key);return true;
+    })
+    .map((x,i)=>({...x,_score:Math.max(...vs.map(v=>searchScore(x,v))),_originalScore:searchScore(x,raw),_i:i}))
+    .filter(x=>Number.isFinite(x._score))
+    .sort((a,b)=>b._score-a._score||a._i-b._i);
+
+  if(!ai)ai=localAiCandidate(raw);
+
+  const final=[];
+  if(ai)final.push(ai);
+  final.push(...ranked);
+
+  const finalSeen=new Set();
+  const deduped=final.filter(x=>{
+    const key=`${norm(x.name)}|${x.brand?norm(x.brand):''}`;
+    if(finalSeen.has(key))return false;
+    finalSeen.add(key);return true;
+  }).slice(0,50);
+
+  renderResults(deduped);
+
+  if(ai?.aiOnline){
+    $('#searchHint').textContent=`🧠 Online AI-förslag · ${ranked.length} databasresultat`;
+  }else if(ai){
+    $('#searchHint').textContent=`💡 Lokalt AI-förslag · ${ranked.length} databasresultat`;
+  }else if(ranked.length){
+    $('#searchHint').textContent=`${ranked.length} relevanta träffar`;
+  }else{
+    $('#searchHint').textContent='Inga relevanta resultat hittades.';
+  }
+}
+
+'''
+
+          p.write_text(s[:start] + new + s[end:], encoding='utf-8')
+          PY
+      - name: Commit app.js and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add public/app.js
+          git commit -m 'Rehaul food search with online AI' || true
+          git rm .github/workflows/rehault-search.yml
+          git commit -m 'Remove temporary search rehaul workflow' || true
+          git push
