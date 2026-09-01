@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kalorier — AI Sandbox</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:24px;background:#f6f7f9;color:#17181a}h1{margin-bottom:6px}p{color:#62666d}.box{background:#fff;border:1px solid #ddd;border-radius:16px;padding:18px;margin:16px 0;box-shadow:0 2px 8px #0000000a}textarea{width:100%;box-sizing:border-box;min-height:110px;padding:14px;border:1px solid #ccc;border-radius:12px;font:inherit}button{border:0;border-radius:10px;padding:11px 16px;background:#17181a;color:#fff;font-weight:700;cursor:pointer;margin-top:10px}.example{background:#f0f1f3;color:#222;margin:5px 5px 0 0}.item{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #eee}.item:last-child{border:0}.muted{color:#777;font-size:13px}.error{color:#b42318}.good{color:#087443}
+</style></head>
+<body>
+<h1>🧠 AI Sandbox</h1>
+<p>Testar mat-tolkningen isolerat. Ingenting sparas i dagboken.</p>
+<div class="box">
+<textarea id="input" placeholder="Exempel: åt 2 ägg stekta i 10g smör och en banan"></textarea>
+<div><button class="example" data-q="åt 2 ägg stekta i 10g smör">2 ägg + 10g smör</button><button class="example" data-q="åt två ägg och en macka med ost">2 ägg + macka med ost</button><button class="example" data-q="150g kyckling med 200g kokt ris">kyckling + ris</button></div>
+<button id="run">Analysera</button>
+</div>
+<div id="status"></div><div id="result"></div>
+<script>
+const $=s=>document.querySelector(s);const input=$('#input');
+document.querySelectorAll('.example').forEach(b=>b.onclick=()=>{input.value=b.dataset.q;run()});$('#run').onclick=run;
+function normalize(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N}\s]/gu,' ').replace(/\s+/g,' ').trim()}
+function parseLocal(text){const n=normalize(text);const items=[];const patterns=[
+[/\b(\d+(?:[.,]\d+)?)\s*(?:g|gram|gramm)\s+(?:av\s+)?(smor|olivolja|olja|ris|kyckling|notfars|brod|ost|mjolk|havregryn|kvarg|yoghurt)\b/g,(m,a,f)=>({query:f,amount:+a.replace(',','.'),unit:'g'})],
+[/\b(\d+)\s*(?:st|stycken)?\s*(agg|ägg|bananer?|applen?|äpple|kyckling(?:file|filé)?|mackor?|brod|ägg)\b/g,(m,a,f)=>({query:f,amount:+a,unit:'st'})]
+];
+for(const [re,make] of patterns){let m;while((m=re.exec(text)))items.push(make(...m))}
+if(/\btva\b|\btvå\b/.test(n)&&/\bagg\b/.test(n)&&!items.some(x=>x.query==='agg'))items.push({query:'ägg',amount:2,unit:'st'});
+if(/\ben\s+macka\b/.test(n)&&!items.some(x=>normalize(x.query)==='macka'))items.push({query:'bröd',amount:1,unit:'st',note:'macka tolkad som bröd'});
+if(/\b(en|ett)\s+banan\b/.test(n)&&!items.some(x=>x.query==='banan'))items.push({query:'banan',amount:1,unit:'st'});
+return items}
+async function search(q){const r=await fetch('/api/foods?q='+encodeURIComponent(q));if(!r.ok)throw new Error('Matdatabasen svarade inte');return r.json()}
+async function run(){const text=input.value.trim();if(!text)return;$('#status').innerHTML='<div class="box">Analyserar…</div>';$('#result').innerHTML='';try{const items=parseLocal(text);if(!items.length){$('#status').innerHTML='<div class="box"><b>🧠 Behöver mer information</b><p>Jag kunde inte säkert dela upp texten i livsmedel ännu. Inget sparades.</p></div>';return}const resolved=await Promise.all(items.map(async i=>{const foods=await search(i.query);return {...i,foods:foods.slice(0,3)}}));let html='<div class="box"><h2>🧠 Tolkning</h2>';for(const i of resolved){html+=`<div class="item"><div><b>${i.amount} ${i.unit} ${i.query}</b><div class="muted">${i.note||'Matchad mot livsmedelsdatabasen'}</div></div><div>${i.foods.length?'<span class="good">✓ match</span>':'<span class="error">Ingen säker match</span>'}</div></div>`;if(i.foods.length)html+=`<div class="muted">Bästa match: <b>${i.foods[0].name}</b> · ${i.foods[0].kcal} kcal/100 g</div>`}html+='</div>';html+='<div class="box"><b>Testläge</b><p class="muted">Detta är bara en sandbox. Ingen mat läggs till i dagboken och AI-resultatet får inte själv bestämma kalorier.</p></div>';$('#status').innerHTML='';$('#result').innerHTML=html}catch(e){$('#status').innerHTML=`<div class="box error">${e.message}</div>`}}
+</script></body></html>
