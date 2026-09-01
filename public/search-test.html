@@ -1,0 +1,37 @@
+<!doctype html><html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kalorier – Search Test</title><style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:30px auto;padding:0 16px;background:#f6f6f3;color:#181818}h1{margin-bottom:6px}.meta{color:#666;margin-bottom:20px}.run{padding:12px 18px;border:0;border-radius:10px;background:#181818;color:#fff;font-weight:700;cursor:pointer}.summary{margin:20px 0;font-size:18px}.pass{color:#167a3a}.fail{color:#b42318}.case{background:#fff;border:1px solid #ddd;border-radius:12px;padding:14px;margin:10px 0}.query{font-weight:800;font-size:17px}.results{margin-top:8px;color:#555}.results b{color:#181818}.reason{margin-top:7px;font-size:13px}.ok{border-left:5px solid #4b9}.bad{border-left:5px solid #d55}</style></head><body><h1>🔎 Kalorier Search Test</h1><div class="meta">Kör samma /api/foods + /api/products som appen. Detta testar relevans, negativa träffar och stavfel.</div><button class="run" id="run">Kör alla tester</button><div id="summary" class="summary"></div><div id="out"></div><script>
+const TESTS=[
+ ['ägg',['ägg'],['potatis','ris','kyckling','banan']],
+ ['agg',['ägg'],['potatis','ris','kyckling']],
+ ['kokt ägg',['ägg'],['potatis','ris','kyckling']],
+ ['stekt ägg',['ägg'],['potatis','ris','kyckling']],
+ ['äggvita',['äggvita'],['potatis','ris','kyckling']],
+ ['äggula',['äggula'],['potatis','ris','kyckling']],
+ ['potatis',['potatis'],['ägg','kyckling','banan']],
+ ['ris',['ris'],['ägg','potatis','banan']],
+ ['kyckling',['kyckling'],['ägg','potatis','banan']],
+ ['kycklingfilé',['kycklingfilé'],['ägg','potatis','banan']],
+ ['kyckling file',['kycklingfilé'],['ägg','potatis']],
+ ['köttfärs',['köttfärs','nötfärs'],['ägg','potatis']],
+ ['nötfärs',['nötfärs'],['ägg','potatis']],
+ ['mjölk',['mjölk'],['ägg','potatis']],
+ ['mjolk',['mjölk'],['ägg','potatis']],
+ ['bröd',['bröd'],['ägg','potatis']],
+ ['brod',['bröd'],['ägg','potatis']],
+ ['smör',['smör'],['ägg','potatis']],
+ ['banan',['banan'],['ägg','potatis']],
+ ['äpple',['äpple'],['ägg','potatis']],
+ ['ost',['ost'],['ägg','potatis']],
+ ['havregryn',['havregryn'],['ägg','potatis']],
+ ['coca cola zero',['coca cola zero'],['potatis','ägg']],
+ ['cola zero',['coca cola zero'],['potatis','ägg']],
+ ['jasmin ris',['ris','jasmin'],['ägg','potatis']],
+ ['kokt potatis',['potatis'],['ägg','ris']],
+ ['grekisk yoghurt',['yoghurt'],['ägg','potatis']],
+ ['kvarg',['kvarg'],['ägg','potatis']]
+];
+const norm=s=>String(s||'').toLocaleLowerCase('sv-SE').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim();
+async function get(path,q){try{const r=await fetch(path+'?q='+encodeURIComponent(q));const d=await r.json();return Array.isArray(d)?d:[]}catch{return[]}}
+async function runOne(t){const [q,want,bad]=t;const [a,b]=await Promise.all([get('/api/foods',q),get('/api/products',q)]);const all=[...a,...b];const names=all.map(x=>norm(x.name));const top=all.slice(0,10).map(x=>x.name);const hasWant=want.some(w=>names.some(n=>n===norm(w)||n.includes(norm(w))));const badTop=top.some(n=>bad.some(x=>norm(n).includes(norm(x))));const pass=hasWant&&!badTop;return {q,top,pass,reason:!hasWant?'Förväntat livsmedel hittades inte':badTop?'Felaktigt livsmedel bland topp 10':'OK'}}
+async function run(){const out=document.querySelector('#out'),sum=document.querySelector('#summary');out.innerHTML='Kör…';let pass=0;const rows=[];for(const t of TESTS){const r=await runOne(t);if(r.pass)pass++;rows.push(r)}sum.innerHTML='<b>'+pass+'/'+rows.length+'</b> tester godkända · '+(rows.length-pass)+' underkända';out.innerHTML=rows.map(r=>'<div class="case '+(r.pass?'ok':'bad')+'"><div class="query">'+(r.pass?'✅':'❌')+' '+r.q+'</div><div class="results">'+r.top.slice(0,5).map((x,i)=>(i+1)+'. <b>'+x.replace(/[&<>]/g,'')+'</b>').join('<br>')+'</div><div class="reason '+(r.pass?'pass':'fail')+'">'+r.reason+'</div></div>').join('')}
+document.querySelector('#run').onclick=run;run();
+</script></body></html>
