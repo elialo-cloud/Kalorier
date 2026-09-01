@@ -7,116 +7,18 @@ const seedFoods = [
   { id: 'oats', name: 'Havregryn', kcal: 360, protein: 13.3, carbs: 57, fat: 6.5 },
   { id: 'potato', name: 'Potatis, kokt', kcal: 80, protein: 1.8, carbs: 17, fat: 0.1 }
 ];
-
-const OFF_FIELDS = 'code,product_name,product_name_sv,brands,quantity,serving_size,nutriments,image_front_small_url,countries_tags';
-const OFF_HEADERS = { 'User-Agent': 'Kalorier/1.0 (Cloudflare Worker)' };
-
-function normalize(text) {
-  return String(text || '')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/coca[-\s]?cola/g, 'coca cola')
-    .replace(/zero sugar/g, 'zero')
-    .replace(/sugarfree|sockerfri/g, 'zero')
-    .replace(/\bcoke\b/g, 'coca cola')
-    .replace(/[^a-z0-9åäö\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function scoreMatch(query, product) {
-  const q = normalize(query);
-  const text = normalize([product.name, product.brand, product.quantity].filter(Boolean).join(' '));
-  if (!q || !text) return 0;
-  if (text === q) return 1000;
-  if (text.includes(q)) return 800;
-
-  const words = q.split(' ').filter(Boolean);
-  const hits = words.filter(w => text.includes(w));
-  let score = hits.length * 120;
-  if (words.length && hits.length === words.length) score += 350;
-
-  // Lightweight fuzzy matching for misspellings/word variants.
-  for (const word of words) {
-    if (word.length < 4 || text.includes(word)) continue;
-    for (const candidate of text.split(' ')) {
-      if (Math.abs(candidate.length - word.length) > 2) continue;
-      let common = 0;
-      for (const ch of word) if (candidate.includes(ch)) common++;
-      if (common / word.length >= 0.75) { score += 45; break; }
-    }
-  }
-  return score;
-}
-
-function productFromOFF(p) {
-  const n = p?.nutriments || {};
-  return {
-    id: `off:${p.code}`,
-    barcode: p.code || null,
-    name: p.product_name_sv || p.product_name || 'Okänd produkt',
-    brand: p.brands || '', quantity: p.quantity || '', serving_size: p.serving_size || '',
-    kcal: Number(n['energy-kcal_100g'] ?? n['energy-kcal'] ?? 0),
-    protein: Number(n['proteins_100g'] ?? 0),
-    carbs: Number(n['carbohydrates_100g'] ?? 0),
-    fat: Number(n['fat_100g'] ?? 0),
-    image: p.image_front_small_url || null, source: 'openfoodfacts'
-  };
-}
-
-async function searchOpenFoodFacts(q) {
-  const params = new URLSearchParams({ search_terms: q, search_simple: '1', action: 'process', json: '1', page_size: '40', page: '1', lc: 'sv', cc: 'se', fields: OFF_FIELDS });
-  const response = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, { headers: OFF_HEADERS });
-  if (!response.ok) throw new Error(`Open Food Facts ${response.status}`);
-  const data = await response.json();
-  return (data.products || [])
-    .filter(p => p.code && (p.product_name_sv || p.product_name))
-    .map(productFromOFF)
-    .filter(p => p.kcal > 0 || p.protein > 0 || p.carbs > 0 || p.fat > 0)
-    .map(p => ({ ...p, _score: scoreMatch(q, p) }))
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 20)
-    .map(({ _score, ...p }) => p);
-}
-
-async function getOpenFoodFactsProduct(barcode) {
-  const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${OFF_FIELDS}`, { headers: OFF_HEADERS });
-  if (!response.ok) throw new Error(`Open Food Facts ${response.status}`);
-  const data = await response.json();
-  return data.status === 1 && data.product ? productFromOFF(data.product) : null;
-}
-
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    if (url.pathname === '/api/health') return Response.json({ ok: true, service: 'kalorier' });
-
-    if (url.pathname === '/api/foods' && request.method === 'GET') {
-      const q = normalize(url.searchParams.get('q') || '');
-      if (env.DB) {
-        const result = q
-          ? await env.DB.prepare(`SELECT id,name,category,kcal_per_100g AS kcal,protein_per_100g AS protein,carbs_per_100g AS carbs,fat_per_100g AS fat,edible_state,preparation,source,verified FROM foods WHERE name LIKE ? ORDER BY verified DESC, name LIMIT 30`).bind(`%${q}%`).all()
-          : await env.DB.prepare(`SELECT id,name,category,kcal_per_100g AS kcal,protein_per_100g AS protein,carbs_per_100g AS carbs,fat_per_100g AS fat,edible_state,preparation,source,verified FROM foods ORDER BY verified DESC, name LIMIT 30`).all();
-        return Response.json(result.results);
-      }
-      return Response.json(q ? seedFoods.filter(f => normalize(f.name).includes(q)) : seedFoods);
-    }
-
-    if (url.pathname === '/api/products' && request.method === 'GET') {
-      const q = (url.searchParams.get('q') || '').trim();
-      if (q.length < 2) return Response.json([]);
-      try { return Response.json(await searchOpenFoodFacts(q), { headers: { 'Cache-Control': 'public, max-age=300' } }); }
-      catch (error) { console.error(error); return Response.json({ error: 'Kunde inte läsa produktdatabasen.' }, { status: 502 }); }
-    }
-
-    if (url.pathname.startsWith('/api/products/barcode/') && request.method === 'GET') {
-      const barcode = url.pathname.split('/').pop();
-      if (!barcode || !/^\d{8,14}$/.test(barcode)) return Response.json({ error: 'Ogiltig streckkod.' }, { status: 400 });
-      try {
-        const product = await getOpenFoodFactsProduct(barcode);
-        return product ? Response.json(product, { headers: { 'Cache-Control': 'public, max-age=3600' } }) : Response.json({ error: 'Produkten hittades inte.' }, { status: 404 });
-      } catch (error) { console.error(error); return Response.json({ error: 'Kunde inte läsa produktdatabasen.' }, { status: 502 }); }
-    }
-    return env.ASSETS.fetch(request);
-  }
-};
+const OFF_FIELDS='code,product_name,product_name_sv,brands,quantity,serving_size,nutriments,image_front_small_url,countries_tags';
+const OFF_HEADERS={'User-Agent':'Kalorier/1.0 (Cloudflare Worker)'};
+function normalize(text){return String(text||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/coca[-\s]?cola/g,'coca cola').replace(/zero sugar/g,'zero').replace(/sugarfree|sockerfri/g,'zero').replace(/\bcoke\b/g,'coca cola').replace(/[^a-z0-9åäö\s]/g,' ').replace(/\s+/g,' ').trim();}
+function scoreMatch(query,product){const q=normalize(query),text=normalize([product.name,product.brand,product.quantity].filter(Boolean).join(' '));if(!q||!text)return 0;if(text===q)return 1000;if(text.includes(q))return 800;const words=q.split(' ').filter(Boolean),hits=words.filter(w=>text.includes(w));let score=hits.length*120;if(words.length&&hits.length===words.length)score+=350;for(const word of words){if(word.length<4||text.includes(word))continue;for(const candidate of text.split(' ')){if(Math.abs(candidate.length-word.length)>2)continue;let common=0;for(const ch of word)if(candidate.includes(ch))common++;if(common/word.length>=.75){score+=45;break;}}}return score;}
+function productFromOFF(p){const n=p?.nutriments||{};return{id:`off:${p.code}`,barcode:p.code||null,name:p.product_name_sv||p.product_name||'Okänd produkt',brand:p.brands||'',quantity:p.quantity||'',serving_size:p.serving_size||'',kcal:Number(n['energy-kcal_100g']??n['energy-kcal']??0),protein:Number(n['proteins_100g']??0),carbs:Number(n['carbohydrates_100g']??0),fat:Number(n['fat_100g']??0),image:p.image_front_small_url||null,source:'openfoodfacts'};}
+async function searchOpenFoodFacts(q){const params=new URLSearchParams({search_terms:q,search_simple:'1',action:'process',json:'1',page_size:'40',page:'1',lc:'sv',cc:'se',fields:OFF_FIELDS});const r=await fetch(`https://world.openfoodfacts.org/cgi/search.pl?${params}`,{headers:OFF_HEADERS});if(!r.ok)throw new Error(`Open Food Facts ${r.status}`);const d=await r.json();return(d.products||[]).filter(p=>p.code&&(p.product_name_sv||p.product_name)).map(productFromOFF).filter(p=>p.kcal>0||p.protein>0||p.carbs>0||p.fat>0).map(p=>({...p,_score:scoreMatch(q,p)})).sort((a,b)=>b._score-a._score).slice(0,20).map(({_score,...p})=>p);}
+async function getOpenFoodFactsProduct(barcode){const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${OFF_FIELDS}`,{headers:OFF_HEADERS});if(!r.ok)throw new Error(`Open Food Facts ${r.status}`);const d=await r.json();return d.status===1&&d.product?productFromOFF(d.product):null;}
+async function ensureDiary(env){if(!env.DB)return;await env.DB.prepare(`CREATE TABLE IF NOT EXISTS food_entries (id INTEGER PRIMARY KEY AUTOINCREMENT,date TEXT NOT NULL,time TEXT NOT NULL,name TEXT NOT NULL,source TEXT,product_id TEXT,barcode TEXT,grams REAL NOT NULL,kcal REAL NOT NULL,protein REAL NOT NULL,carbs REAL NOT NULL,fat REAL NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`).run();}
+function json(data,status=200){return Response.json(data,{status});}
+export default {async fetch(request,env){const url=new URL(request.url);if(url.pathname==='/api/health')return json({ok:true,service:'kalorier'});
+if(url.pathname==='/api/diary'&&env.DB){await ensureDiary(env);if(request.method==='GET'){const date=url.searchParams.get('date')||new Date().toISOString().slice(0,10);const r=await env.DB.prepare(`SELECT * FROM food_entries WHERE date=? ORDER BY time ASC,id ASC`).bind(date).all();return json(r.results);}if(request.method==='POST'){let b;try{b=await request.json();}catch{return json({error:'Ogiltig JSON.'},400);}const date=String(b.date||new Date().toISOString().slice(0,10));const now=new Date();const time=String(b.time||now.toISOString().slice(11,16));const grams=Number(b.grams);if(!b.name||!Number.isFinite(grams)||grams<=0)return json({error:'Namn och mängd krävs.'},400);const r=await env.DB.prepare(`INSERT INTO food_entries(date,time,name,source,product_id,barcode,grams,kcal,protein,carbs,fat) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(date,time,String(b.name),b.source||null,b.product_id||null,b.barcode||null,grams,Number(b.kcal)||0,Number(b.protein)||0,Number(b.carbs)||0,Number(b.fat)||0).run();return json({id:r.meta.last_row_id});}if(request.method==='PUT'||request.method==='PATCH'){let b;try{b=await request.json();}catch{return json({error:'Ogiltig JSON.'},400);}const id=Number(url.searchParams.get('id'));if(!id)return json({error:'ID saknas.'},400);await env.DB.prepare(`UPDATE food_entries SET date=?,time=?,name=?,grams=?,kcal=?,protein=?,carbs=?,fat=? WHERE id=?`).bind(String(b.date),String(b.time),String(b.name),Number(b.grams),Number(b.kcal)||0,Number(b.protein)||0,Number(b.carbs)||0,Number(b.fat)||0,id).run();return json({ok:true});}if(request.method==='DELETE'){const id=Number(url.searchParams.get('id'));if(!id)return json({error:'ID saknas.'},400);await env.DB.prepare(`DELETE FROM food_entries WHERE id=?`).bind(id).run();return json({ok:true});}}
+if(url.pathname==='/api/foods'&&request.method==='GET'){const q=normalize(url.searchParams.get('q')||'');if(env.DB){const r=q?await env.DB.prepare(`SELECT id,name,category,kcal_per_100g AS kcal,protein_per_100g AS protein,carbs_per_100g AS carbs,fat_per_100g AS fat,edible_state,preparation,source,verified FROM foods WHERE name LIKE ? ORDER BY verified DESC,name LIMIT 30`).bind(`%${q}%`).all():await env.DB.prepare(`SELECT id,name,category,kcal_per_100g AS kcal,protein_per_100g AS protein,carbs_per_100g AS carbs,fat_per_100g AS fat,edible_state,preparation,source,verified FROM foods ORDER BY verified DESC,name LIMIT 30`).all();return json(r.results);}return json(q?seedFoods.filter(f=>normalize(f.name).includes(q)):seedFoods);}
+if(url.pathname==='/api/products'&&request.method==='GET'){const q=(url.searchParams.get('q')||'').trim();if(q.length<2)return json([]);try{return Response.json(await searchOpenFoodFacts(q),{headers:{'Cache-Control':'public,max-age=300'}});}catch(e){console.error(e);return json({error:'Kunde inte läsa produktdatabasen.'},502);}}
+if(url.pathname.startsWith('/api/products/barcode/')&&request.method==='GET'){const barcode=url.pathname.split('/').pop();if(!/^\d{8,14}$/.test(barcode))return json({error:'Ogiltig streckkod.'},400);try{const p=await getOpenFoodFactsProduct(barcode);return p?json(p):json({error:'Produkten hittades inte.'},404);}catch(e){console.error(e);return json({error:'Kunde inte läsa produktdatabasen.'},502);}}
+return env.ASSETS.fetch(request);}};
