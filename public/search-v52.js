@@ -51,9 +51,6 @@
     return s;
   }
 
-  // Fallback knowledge layer. This is deliberately conservative: it only creates
-  // an AI-style suggestion when the real databases did not produce a strong hit.
-  // Nutrition values are fixed reference values per 100 g, not invented per request.
   const SMART_FOODS = [
     {keys:['kokt agg','kokt honsagg','hardkokt agg','stekt agg'],name:'Ägg, kokt',kcal:143,protein:12.6,carbs:.7,fat:9.5},
     {keys:['agg','honsagg'],name:'Ägg, hönsägg',kcal:143,protein:12.6,carbs:.7,fat:9.5},
@@ -84,10 +81,17 @@
 
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const badge=item=>{let cls='search-badge-livs',label='LIVS';if(item.source==='openfoodfacts'){cls='search-badge-off';label='OFF'}else if(item.source==='ai'){cls='search-badge-ai';label='AI'}return `<span class="search-badge ${cls}">${label}</span>`};
+  const aiBar=document.createElement('div');
+  aiBar.className='ai-search-bar';
+  aiBar.setAttribute('aria-live','polite');
+  results.parentNode.insertBefore(aiBar,results);
+
+  function resultButton(f){return `<button type="button" class="result" data-id="${esc(f.id||norm(f.name))}"><div class="result-main"><strong>${esc(f.name)}</strong>${badge(f)}</div><small>${f.brand?esc(f.brand)+' · ':''}${Math.round(Number(f.kcal)||0)} kcal · ${(Number(f.protein)||0).toLocaleString('sv-SE',{maximumFractionDigits:1})} g protein / 100 g</small></button>`}
   function render(items,aiItem=null){
-    const list=aiItem?[...items,aiItem]:items;
-    results.innerHTML=list.length?list.map((f,i)=>`<button type="button" class="result" data-i="${i}"><div class="result-main"><strong>${esc(f.name)}</strong>${badge(f)}</div><small>${f.brand?esc(f.brand)+' · ':''}${Math.round(Number(f.kcal)||0)} kcal · ${(Number(f.protein)||0).toLocaleString('sv-SE',{maximumFractionDigits:1})} g protein / 100 g${f.source==='ai'?' · Smart uppskattning från referensvärde':''}</small></button>`).join(''):'<div class="empty">Inga relevanta resultat hittades.</div>';
-    results.querySelectorAll('.result').forEach(b=>b.onclick=()=>choose(list[+b.dataset.i]));
+    aiBar.innerHTML=aiItem?`<div class="ai-search-inner"><div class="ai-search-copy"><span class="ai-search-title">AI-förslag</span><strong>${esc(aiItem.name)}</strong><small>${Math.round(Number(aiItem.kcal)||0)} kcal · ${(Number(aiItem.protein)||0).toLocaleString('sv-SE',{maximumFractionDigits:1})} g protein / 100 g</small></div><button type="button" class="ai-search-select">Välj</button></div>`:'';
+    results.innerHTML=items.length?items.map(resultButton).join(''):'<div class="empty">Inga relevanta resultat hittades.</div>';
+    results.querySelectorAll('.result').forEach(b=>{const id=b.dataset.id;const food=items.find(x=>String(x.id||norm(x.name))===id);b.onclick=()=>choose(food)});
+    const aiButton=aiBar.querySelector('.ai-search-select');if(aiButton)aiButton.onclick=()=>choose(aiItem);
   }
   function choose(food){window.__kalorierSelectedFood=food;amountArea.hidden=false;selectedFood.innerHTML=`<strong>${esc(food.name)}</strong><small>${Math.round(Number(food.kcal)||0)} kcal per 100 g · ${food.source==='openfoodfacts'?'OFF':food.source==='ai'?'AI':'LIVS'}${food.brand?' · '+esc(food.brand):''}</small>`;requestAnimationFrame(()=>{amount.focus();amount.select()})}
 
@@ -100,8 +104,8 @@
       if(search._request!==request)return;
       const seen=new Set(),ranked=all.filter(x=>{const k=`${x.source||'livs'}:${x.id||norm(x.name)}`;if(seen.has(k))return false;seen.add(k);return true}).map(x=>({...x,_score:Math.max(...variants.map(v=>score(x,v)))})).filter(x=>x._score>0).sort((a,b)=>b._score-a._score);
       const ai=smartSuggestion(raw,ranked);
-      render(ranked.slice(0,49),ai);
-      hint.textContent=ranked.length?(ai?`${Math.min(49,ranked.length)} relevanta + AI-förslag`:`${Math.min(50,ranked.length)} relevanta resultat`):(ai?'AI-förslag':'Inga relevanta resultat.');
+      render(ranked.slice(0,50),ai);
+      hint.textContent=ranked.length?(ai?`${Math.min(50,ranked.length)} relevanta + AI-förslag`:`${Math.min(50,ranked.length)} relevanta resultat`):(ai?'AI-förslag':'Inga relevanta resultat.');
     }catch{if(search._request===request){hint.textContent='Kunde inte läsa databaserna.';render([])}}
   }
 
@@ -111,5 +115,5 @@
   const close=()=>{$('#searchView').classList.remove('open');$('#searchView').setAttribute('aria-hidden','true');document.body.style.overflow='';window.__kalorierSelectedFood=null};
   $('#addFood').onclick=()=>open('');$('#closeSearch').onclick=close;document.querySelectorAll('.quick button').forEach(b=>b.onclick=()=>open(b.dataset.q));
   saveFood.onclick=async()=>{const food=window.__kalorierSelectedFood,grams=Number(amount.value);if(!food||!(grams>0))return;const f=grams/100,body={date:new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10),time:new Date().toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'}),name:food.name,source:food.source||'livsmedelsverket',product_id:food.id||null,barcode:food.barcode||null,grams,kcal:(food.kcal||0)*f,protein:(food.protein||0)*f,carbs:(food.carbs||0)*f,fat:(food.fat||0)*f};const r=await fetch('/api/diary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(r.ok){bumpUsage(food);close();location.reload()}else alert('Kunde inte spara maten.')};
-  const style=document.createElement('style');style.textContent=`.result-main{display:flex;align-items:center;gap:8px}.search-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}.search-badge-livs{background:#ecebe6;color:#3d3d39}.search-badge-off{background:#181818;color:#fff}.search-badge-ai{background:#e7ddff;color:#5b3b9c}`;document.head.appendChild(style);
+  const style=document.createElement('style');style.textContent=`.result-main{display:flex;align-items:center;gap:8px}.search-badge{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.04em;white-space:nowrap}.search-badge-livs{background:#ecebe6;color:#3d3d39}.search-badge-off{background:#181818;color:#fff}.search-badge-ai{background:#e7ddff;color:#5b3b9c}.ai-search-bar{flex:0 0 auto;margin:0 0 8px}.ai-search-inner{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid #ddd;border-radius:15px;padding:11px 12px;box-shadow:0 2px 10px #00000008}.ai-search-copy{min-width:0}.ai-search-title{display:block;color:#6b4aa1;font-size:10px;font-weight:850;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2px}.ai-search-copy strong{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ai-search-copy small{display:block;color:#888;margin-top:3px;font-size:11px}.ai-search-select{border:0;background:#181818;color:#fff;border-radius:11px;padding:10px 13px;font-weight:800;white-space:nowrap;touch-action:manipulation}`;document.head.appendChild(style);
 })();
