@@ -1,4 +1,3 @@
-```js
 let log=[],selected=null,searchTimer=null,scanner=null,cameraStream=null,currentDate=localDate(),calendarCursor=new Date();
 const $=s=>document.querySelector(s),searchView=$('#searchView'),calendarView=$('#calendarView'),scannerView=$('#scannerView');
 const defaultGoals={kcal:2200,protein:160,carbs:220,fat:70,goal:'maintain'};
@@ -1661,7 +1660,6 @@ $('#nextDay').onclick=
   ()=>shiftDay(1);
 
 loadDay();
-```
 
 /* =========================================================
    ONLINE AI V4 — gratis nät-AI som första sökträff
