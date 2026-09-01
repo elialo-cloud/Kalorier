@@ -10,10 +10,7 @@
 <body>
   <main class="app">
     <header class="topbar">
-      <div>
-        <span class="eyebrow">KALORIER</span>
-        <h1>Idag</h1>
-      </div>
+      <div><span class="eyebrow">KALORIER</span><h1>Idag</h1></div>
       <button class="icon-button" aria-label="Inställningar">⚙</button>
     </header>
 
@@ -34,6 +31,7 @@
     </section>
 
     <button class="add" id="addFood">＋ Lägg till mat</button>
+    <button class="add" id="scanBarcode">▣ Skanna streckkod</button>
 
     <section class="quick">
       <button>🥚 Ägg</button><button>🍌 Banan</button><button>🍚 Ris</button><button>🍗 Kyckling</button>
@@ -45,7 +43,8 @@
       <button class="close" value="cancel" aria-label="Stäng">×</button>
       <span class="eyebrow">LÄGG TILL</span>
       <h2>Vad åt du?</h2>
-      <label>Sök mat<input id="foodSearch" autocomplete="off" placeholder="t.ex. banan" /></label>
+      <label>Sök mat eller produkt<input id="foodSearch" autocomplete="off" placeholder="t.ex. banan eller Coca-Cola" /></label>
+      <div class="search-tabs"><button type="button" id="foodTab" class="active">Livsmedel</button><button type="button" id="productTab">Produkter</button></div>
       <div id="results" class="results"></div>
       <div id="amountArea" class="amount-area" hidden>
         <label>Mängd (gram)<input id="amount" type="number" min="0" step="1" value="100" /></label>
@@ -54,6 +53,19 @@
       </div>
     </form>
   </dialog>
+
+  <dialog id="scannerDialog">
+    <div class="scanner">
+      <button class="close" id="closeScanner" aria-label="Stäng">×</button>
+      <span class="eyebrow">STRECKKOD</span>
+      <h2>Skanna produkt</h2>
+      <video id="scannerVideo" autoplay muted playsinline></video>
+      <div id="scannerStatus" class="empty">Startar kameran…</div>
+      <label>Skriv streckkod manuellt<input id="manualBarcode" inputmode="numeric" autocomplete="off" placeholder="t.ex. 7310865004701" /></label>
+      <button type="button" class="primary" id="manualScan">Sök produkt</button>
+    </div>
+  </dialog>
+
   <script type="module" src="/app.js"></script>
 </body>
 </html>
