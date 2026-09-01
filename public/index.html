@@ -1,24 +1,23 @@
 <!doctype html>
 <html lang="sv">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#f5f5f2" />
-  <title>Kalorier v2</title>
-  <link rel="stylesheet" href="/app.css" />
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f6f6f3"><title>Kalorier V3</title><link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <main class="app">
-    <header class="topbar"><div class="brand"><span class="eyebrow">KALORIER <b>V2</b></span><h1 id="pageTitle">Idag</h1></div><button class="icon-button" aria-label="Inställningar">⚙</button></header>
-    <section class="day-nav"><button id="prevDay" aria-label="Föregående dag">‹</button><button id="todayBtn">Idag</button><div><strong id="dateLabel"></strong><small id="dateSubLabel"></small></div><button id="nextDay" aria-label="Nästa dag">›</button></section>
-    <section class="summary"><div class="ring" id="calorieRing"><span><strong id="calories">0</strong><small>/ 2200 kcal</small></span></div><div class="remaining"><span>Kvar</span><strong id="remaining">2 200 kcal</strong></div></section>
-    <section class="macros"><div><span>Protein</span><strong id="protein">0 / 160 g</strong><div class="bar"><i id="proteinBar"></i></div></div><div><span>Kolhydrater</span><strong id="carbs">0 / 220 g</strong><div class="bar"><i id="carbsBar"></i></div></div><div><span>Fett</span><strong id="fat">0 / 70 g</strong><div class="bar"><i id="fatBar"></i></div></div></section>
-    <section class="meals"><div class="section-title"><h2>Mat</h2><span id="mealCount">0 kcal</span></div><div id="foodList" class="food-list"><div class="empty">Inget registrerat ännu.</div></div></section>
-    <button class="add" id="addFood">＋ Lägg till mat</button><button class="add scan-button" id="scanBarcode">▣ Skanna streckkod</button>
-    <section class="quick"><button>🥚 Ägg</button><button>🍌 Banan</button><button>🍚 Ris</button><button>🍗 Kyckling</button></section>
-  </main>
-  <dialog id="foodDialog"><form method="dialog" id="foodForm"><button class="close" value="cancel" aria-label="Stäng">×</button><span class="eyebrow">LÄGG TILL</span><h2>Vad åt du?</h2><label>Sök mat eller produkt<input id="foodSearch" autocomplete="off" enterkeyhint="search" placeholder="t.ex. banan, Keso eller Coca-Cola" /></label><div id="results" class="results"></div><div id="amountArea" class="amount-area" hidden><label>Mängd (gram)<input id="amount" type="number" min="0" step="1" value="100" inputmode="decimal" /></label><div class="selected" id="selectedFood"></div><button class="primary" id="saveFood" value="default">Lägg till</button></div></form></dialog>
-  <dialog id="scannerDialog"><div class="scanner"><button class="close" id="closeScanner" aria-label="Stäng">×</button><span class="eyebrow">STRECKKOD</span><h2>Skanna produkt</h2><div id="scannerReader"></div><div id="scannerStatus" class="empty">Startar kameran…</div><label>Skriv streckkod manuellt<input id="manualBarcode" inputmode="numeric" autocomplete="off" placeholder="t.ex. 7310865004701" /></label><button type="button" class="primary" id="manualScan">Sök produkt</button></div></dialog>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script><script type="module" src="/app.js"></script>
-</body>
-</html>
+<main class="app">
+<header class="topbar"><div><div class="eyebrow">KALORIER <b>V3</b></div><h1>Dagbok</h1></div><button class="ghost" id="todayTop">Idag</button></header>
+<section class="datebar"><button id="prevDay" aria-label="Föregående dag">‹</button><button id="openCalendar" class="date-main"><strong id="dateLabel"></strong><span id="dateSubLabel"></span></button><button id="nextDay" aria-label="Nästa dag">›</button></section>
+<section class="summary"><div class="ring" id="calorieRing"><div><strong id="calories">0</strong><span>kcal</span></div></div><div><span class="muted">Kvar idag</span><strong class="remain" id="remaining">2 200 kcal</strong><div class="goal">mål 2 200 kcal</div></div></section>
+<section class="macros"><div><span>Protein</span><strong id="protein">0 / 160 g</strong><i><b id="proteinBar"></b></i></div><div><span>Kolhydrater</span><strong id="carbs">0 / 220 g</strong><i><b id="carbsBar"></b></i></div><div><span>Fett</span><strong id="fat">0 / 70 g</strong><i><b id="fatBar"></b></i></div></section>
+<section class="food-section"><div class="section-head"><h2>Mat</h2><span id="mealCount">0 kcal</span></div><div id="foodList" class="food-list"></div></section>
+<div class="actions"><button class="primary" id="addFood">＋ Lägg till mat</button><button class="secondary" id="scanBarcode">▣ Skanna</button></div>
+<section class="quick"><button data-q="Ägg">🥚 Ägg</button><button data-q="Banan">🍌 Banan</button><button data-q="Ris">🍚 Ris</button><button data-q="Kyckling">🍗 Kyckling</button></section>
+</main>
+
+<div id="searchView" class="sheet" aria-hidden="true"><div class="sheet-head"><button id="closeSearch" class="back">‹</button><div><div class="eyebrow">LÄGG TILL</div><h2>Vad åt du?</h2></div></div><div class="search-box"><span>⌕</span><input id="foodSearch" autocomplete="off" enterkeyhint="search" placeholder="Sök mat eller produkt…"><button id="clearSearch" aria-label="Rensa">×</button></div><div class="search-hint" id="searchHint">Sök på namn, varumärke eller produkt.</div><div id="results" class="results"></div><div id="amountArea" class="amount-card" hidden><div id="selectedFood"></div><label>Mängd i gram<input id="amount" type="number" min="0" step="1" value="100" inputmode="decimal"></label><button class="primary" id="saveFood">Lägg till i dagboken</button></div></div>
+
+<div id="calendarView" class="overlay" aria-hidden="true"><div class="calendar-card"><div class="cal-head"><button id="closeCalendar">×</button><div><div class="eyebrow">DAGBOK</div><h2 id="monthTitle"></h2></div><button id="calendarToday" class="ghost">Idag</button></div><div class="month-nav"><button id="prevMonth">‹</button><strong id="monthYear"></strong><button id="nextMonth">›</button></div><div class="weekdays"><span>M</span><span>T</span><span>O</span><span>T</span><span>F</span><span>L</span><span>S</span></div><div id="calendarGrid" class="calendar-grid"></div></div></div>
+
+<div id="scannerView" class="sheet" aria-hidden="true"><div class="sheet-head"><button id="closeScanner" class="back">‹</button><div><div class="eyebrow">STRECKKOD</div><h2>Skanna produkt</h2></div></div><div id="scannerReader"></div><div id="scannerStatus" class="status">Startar mobilkameran…</div><label class="manual">Eller skriv streckkoden<input id="manualBarcode" inputmode="numeric" autocomplete="off" placeholder="EAN / UPC"></label><button class="primary" id="manualScan">Sök produkt</button></div>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script><script type="module" src="/app.js"></script>
+</body></html>
