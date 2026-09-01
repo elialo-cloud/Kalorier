@@ -1,19 +1,23 @@
 name: Fix search ranking
-on: push
+on:
+  push:
+    branches:
+      - main
 permissions:
   contents: write
 jobs:
   patch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Patch search engine
         run: python3 scripts/patch_search_v7.py
       - name: Commit app.js
         run: |
-          if git diff --quiet -- public/app.js; then exit 0; fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add public/app.js
-          git commit -m 'Fix food search ranking [search-v7]'
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Fix food search ranking [search-v7]"
           git push
