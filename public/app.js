@@ -333,25 +333,26 @@ function selectFood(food){
 
 function renderResults(items){
   const r=$('#results');
-
-  r.innerHTML=
-    items.length
-      ?items.map((f,i)=>{
-        const label=sourceLabel(f);
-
-        return `<button type="button" class="result" data-i="${i}"><div class="result-top"><strong>${esc(f.name)}</strong><span class="source-badge source-${String(f.source||'livsmedelsverket').replace(/[^a-z]/gi,'')}">${label}</span></div><small>${f.brand?esc(f.brand)+' · ':''}${fmt(f.kcal)} kcal · ${fmt1(f.protein)} g protein / 100 g${f.source==='ai'?' · AI-estimat':f.source==='openfoodfacts'?' · Produkt':''}</small></button>`
-      }).join('')
-      :'<div class="empty">Inga relevanta resultat hittades.</div>';
-
-  r.querySelectorAll('.result')
-    .forEach(b=>
-      b.onclick=()=>selectFood(items[+b.dataset.i])
-    )
+  if(!items.length){r.innerHTML='<div class="empty">Inga relevanta resultat hittades.</div>';return;}
+  const ai=items.filter(x=>x.source==='ai'),db=items.filter(x=>x.source!=='ai');
+  const button=f=>{
+    const label=sourceLabel(f);
+    return `<button type="button" class="result" data-key="${esc(`${f.source||''}|${norm(f.name)}|${norm(f.brand||'')}`)}"><div class="result-top"><strong>${esc(f.name)}</strong><span class="source-badge source-${String(f.source||'livsmedelsverket').replace(/[^a-z]/gi,'')}">${label}</span></div><small>${f.brand?esc(f.brand)+' · ':''}${fmt(f.kcal)} kcal · ${fmt1(f.protein)} g protein / 100 g${f.source==='ai'?' · AI-estimat':f.source==='openfoodfacts'?' · Produkt':''}</small></button>`;
+  };
+  let html='';
+  if(ai.length)html+=`<div class="search-group-title">🧠 AI-förslag</div>${ai.slice(0,1).map(button).join('')}`;
+  if(db.length)html+=`<div class="search-group-title">Livsmedel & produkter</div>${db.map(button).join('')}`;
+  r.innerHTML=html;
+  r.querySelectorAll('.result').forEach(b=>b.onclick=()=>{
+    const key=b.dataset.key;
+    const food=items.find(x=>`${x.source||''}|${norm(x.name)}|${norm(x.brand||'')}`===key);
+    if(food)selectFood(food);
+  });
 }
 
 
 /* =========================================================
-   SÖKMOTOR V6
+   SÖKMOTOR V7
    Lifesum-liknande ranking + fuzzy search + AI
 ========================================================= */
 
@@ -472,10 +473,11 @@ function aliasTerms(q){
 
 function searchVariants(q){
   const n=norm(q);
+  if(!n)return [];
+  const qt=tokens(n);
+  if(qt.length===1&&qt[0].length<=3)return [n];
   const out=new Set([n]);
-
   aliasTerms(n).forEach(x=>out.add(x));
-
   return [...out]
 }
 
@@ -683,139 +685,57 @@ function tokenScore(queryToken,nameTokens){
 }
 
 function searchScore(item,q){
-
   const query=norm(q);
   const name=norm(item.name);
   const brand=norm(item.brand);
-
-  if(!query||!name)
-    return -Infinity;
-
-  const qt=tokens(query);
-  const nt=tokens(name);
-  const bt=tokens(brand);
-
-  let score=0;
-  let matched=0;
-
-  /* Exakt namn */
-
-  if(name===query)
-    score+=10000;
-
-  /* Namnet börjar med sökningen */
-
-  if(name.startsWith(query))
-    score+=4500;
-
-  /* Exakt fras någonstans */
-
-  if(name.includes(` ${query}`))
-    score+=3000;
-
-  if(name.includes(query))
-    score+=1800;
-
-  /* Varumärke */
-
-  if(brand===query)
-    score+=2500;
-
-  if(brand.includes(query))
-    score+=900;
-
-  /* Token ranking */
-
-  qt.forEach(token=>{
-
-    const ts=tokenScore(token,nt);
-
-    if(ts>=.72){
-      matched++;
-
-      score+=
-        ts>=.99
-          ?1800
-          :ts>=.9
-            ?1100
-            :500*ts;
+  if(!query||!name)return -Infinity;
+  const qt=tokens(query),nt=tokens(name),bt=tokens(brand);
+  const isShort=qt.length===1&&qt[0].length<=3;
+  let score=0,matched=0;
+  if(isShort){
+    const t=qt[0];
+    if(name===t)score+=12000;
+    else if(nt[0]===t)score+=10500;
+    else if(nt.some(x=>x===t))score+=9000;
+    else if(nt[0]?.startsWith(t))score+=7000;
+    else if(nt.some(x=>x.startsWith(t)))score+=5500;
+    else if(brand===t||bt.includes(t))score+=5000;
+    else{
+      const close=nt.some(x=>x.length>=t.length&&levenshtein(t,x)<=1&&similarity(t,x)>=.75);
+      if(!close)return -Infinity;
+      score+=2500;
     }
-  });
-
-  /*
-    Alla sökord bör finnas.
-    Detta är viktigt för exempelvis:
-    "kyckling ris"
-    så att "kyckling" ensam inte tar över.
-  */
-
-  if(qt.length>1){
-
-    if(matched===qt.length)
-      score+=2200;
-
-    else if(matched===qt.length-1)
-      score-=500;
-
-    else
-      score-=1800;
+    if(!nt.some(x=>x===t||x.startsWith(t))&&!bt.some(x=>x===t||x.startsWith(t)))return -Infinity;
+    score-=Math.max(0,nt.length-1)*18;
+    if(item.verified)score+=180;
+    return score;
   }
-
-  /* Position: första orden är viktigare */
-
-  if(qt.length){
-
-    const first=qt[0];
-    const pos=nt.indexOf(first);
-
-    if(pos===0)
-      score+=800;
-
-    else if(pos>0&&pos<3)
-      score+=250;
+  for(const token of qt){
+    let best=0,bestIndex=-1;
+    nt.forEach((n,i)=>{
+      let v=0;
+      if(n===token)v=1;
+      else if(n.startsWith(token))v=.94;
+      else if(token.startsWith(n)&&n.length>=4)v=.86;
+      else if(token.length>=4&&n.length>=4&&levenshtein(token,n)<=1)v=.78;
+      if(v>best){best=v;bestIndex=i;}
+    });
+    if(best>=.78){matched++;score+=best>=.99?2600:best>=.9?1700:850;if(bestIndex===0)score+=450;}
   }
-
-  /* Kortare, renare namn prioriteras */
-
-  score-=
-    Math.max(
-      0,
-      nt.length-qt.length
-    )*35;
-
-  /* Undvik recept / maträtter vid enkel råvara */
-
-  if(
-    qt.length===1&&
-    /\b(hemgjord|hemlagad|recept|sås|sauce|gryta)\b/.test(name)&&
-    !name.startsWith(query)
-  ){
-    score-=700;
+  if(matched!==qt.length)return -Infinity;
+  if(name===query)score+=12000;
+  else if(name.startsWith(query))score+=6500;
+  else if(name.includes(` ${query}`))score+=4800;
+  else if(name.includes(query))score+=1800;
+  if(brand===query)score+=1800;
+  else if(brand.includes(query))score+=350;
+  if(qt.length===1){
+    const prepared=/(hemgjord|hemlagad|recept|gryta|sås|sauce|pannkaka|panna|pizza|gratäng|soppa|dessert)/.test(name);
+    if(prepared&&!name.startsWith(query))score-=1400;
   }
-
-  /* Verified */
-
-  if(item.verified)
-    score+=120;
-
-  /* OFF-produkter med varumärke */
-
-  if(
-    item.source==='openfoodfacts'&&
-    brand
-  ){
-    score+=50;
-  }
-
-  /*
-    Svag fuzzy-match ska inte få igenom helt fel saker.
-  */
-
-  if(
-    matched===0
-  )
-    return -Infinity;
-
+  score-=Math.max(0,nt.length-qt.length)*45;
+  if(item.verified)score+=180;
+  if(item.source==='openfoodfacts'&&brand)score+=35;
   return score;
 }
 
@@ -1069,7 +989,9 @@ async function searchAll(q=''){
     */
 
     final=
-      final.slice(0,50);
+      final.slice(0,100);
+
+    final=final.filter(x=>x.source==='ai'||Number.isFinite(searchScore(x,raw)));
 
     renderResults(final);
 
