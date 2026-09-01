@@ -1,3 +1,4 @@
+```js
 let log=[],selected=null,searchTimer=null,scanner=null,cameraStream=null,currentDate=localDate(),calendarCursor=new Date();
 const $=s=>document.querySelector(s),searchView=$('#searchView'),calendarView=$('#calendarView'),scannerView=$('#scannerView');
 const defaultGoals={kcal:2200,protein:160,carbs:220,fat:70,goal:'maintain'};
@@ -351,22 +352,36 @@ function renderResults(items){
 
 
 /* =========================================================
-   SÖKMOTOR
+   SÖKMOTOR V6
+   Lifesum-liknande ranking + fuzzy search + AI
 ========================================================= */
 
+const SEARCH_CACHE=new Map();
 const SEARCH_ALIASES=[
-  ['ägg',['agg','honsagg','kokt agg','kokt ägg','stekt agg','stekt ägg','hardkokt agg','hårdkokt ägg']],
-  ['grädde',['gradd','vispgradd','vispgrädde','matgradd','matgrädde']],
-  ['mjölk',['mjolk','standardmjolk','standardmjölk','mellanmjolk','mellanmjölk','lattmjolk','lättmjölk']],
-  ['kyckling',['kycklingfilé','kycklingfile','kycklingbröst','kycklingbrost','kycklinglår','kycklinglar']],
-  ['ris',['kokt ris','ris kokt','jasminris','basmatiris']],
-  ['potatis',['kokt potatis','potatis kokt','potatisplatt','potatisplätt','raggmunk']],
-  ['bröd',['brod','franska','limpa','fullkornsbrod','fullkornsbröd','knäckebrod','knäckebröd']],
-  ['köttfärs',['kottfars','notfars','nötfärs','notkottfars','nötköttfärs']],
+  ['ägg',['agg','ägg','honsagg','hönsägg','kokt ägg','kokt agg','stekt ägg','stekt agg','hårdkokt ägg','hardkokt agg']],
+  ['grädde',['gradd','grädde','vispgrädde','vispgradd','matgrädde','matgradd']],
+  ['mjölk',['mjolk','mjölk','standardmjölk','standardmjolk','mellanmjölk','mellanmjolk','lättmjölk','lattmjolk']],
+  ['kyckling',['kyckling','kycklingfilé','kycklingfile','kycklingbröst','kycklingbrost','kycklinglår','kycklinglar']],
+  ['ris',['ris','kokt ris','ris kokt','jasminris','basmatiris']],
+  ['potatis',['potatis','kokt potatis','potatis kokt','potatisplätt','potatisplatt','raggmunk']],
+  ['bröd',['bröd','brod','franska','limpa','fullkornsbröd','fullkornsbrod','knäckebröd','knackebrod']],
+  ['köttfärs',['köttfärs','kottfars','nötfärs','notfars','nötköttfärs','notkottfars']],
   ['yoghurt',['yoghurt','grekisk yoghurt','turkisk yoghurt']],
-  ['kvarg',['skyr','proteinpudding','kvarg']],
-  ['coca cola zero',['coke zero','cola zero','coca cola zero']],
-  ['coca cola',['coke','cola','coca cola']]
+  ['kvarg',['kvarg','skyr','proteinpudding']],
+  ['coca cola zero',['coca cola zero','coca-cola zero','cola zero','coke zero','coke zero sugar']],
+  ['coca cola',['coca cola','coca-cola','cola','coke']],
+  ['banan',['banan','banana']],
+  ['äpple',['äpple','apple']],
+  ['havregryn',['havregryn','havregrynsgröt','havregryns grot']],
+  ['pasta',['pasta','makaroner','spaghetti','spagetti','penne']],
+  ['tonfisk',['tonfisk','tuna']],
+  ['lax',['lax','salmon']],
+  ['avokado',['avokado','avocado']],
+  ['ost',['ost','cheese']],
+  ['smör',['smör','smor','butter']],
+  ['olja',['olja','olivolja','rapsolja']],
+  ['nötter',['nötter','notter','mandel','cashew','cashewnötter','jordnötter']],
+  ['proteinpulver',['proteinpulver','whey','whey protein','protein powder']]
 ];
 
 function norm(s){
@@ -374,7 +389,7 @@ function norm(s){
     .toLocaleLowerCase('sv-SE')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^\p{L}\p{N}]+/gu,' ')
+    .replace(/[^a-z0-9]+/gi,' ')
     .replace(/\s+/g,' ')
     .trim()
 }
@@ -383,44 +398,29 @@ function tokens(s){
   return norm(s).split(' ').filter(Boolean)
 }
 
-function lev(a,b){
+function levenshtein(a,b){
   if(a===b)return 0;
 
-  if(Math.abs(a.length-b.length)>3)
-    return 99;
+  if(!a||!b)
+    return Math.max(a.length,b.length);
 
-  const prev=
-    Array.from(
-      {length:b.length+1},
-      (_,i)=>i
-    );
+  const prev=Array.from(
+    {length:b.length+1},
+    (_,i)=>i
+  );
 
   for(let i=1;i<=a.length;i++){
-
     const cur=[i];
 
     for(let j=1;j<=b.length;j++){
-
       cur[j]=Math.min(
         cur[j-1]+1,
         prev[j]+1,
         prev[j-1]+(a[i-1]===b[j-1]?0:1)
-      );
-
-      if(
-        j>1&&
-        i>1&&
-        a[i-1]===b[j-2]&&
-        a[i-2]===b[j-1]
-      ){
-        cur[j]=Math.min(
-          cur[j],
-          prev[j-2]+1
-        )
-      }
+      )
     }
 
-    for(let j=0;j<=b.length;j++)
+    for(let j=0;j<cur.length;j++)
       prev[j]=cur[j]
   }
 
@@ -428,15 +428,18 @@ function lev(a,b){
 }
 
 function similarity(a,b){
-  if(!a||!b)return 0;
+  a=norm(a);
+  b=norm(b);
 
+  if(!a||!b)return 0;
   if(a===b)return 1;
 
-  if(a.includes(b)||b.includes(a))
+  if(a.includes(b)||b.includes(a)){
     return Math.min(a.length,b.length)/
-           Math.max(a.length,b.length);
+      Math.max(a.length,b.length)
+  }
 
-  const d=lev(a,b);
+  const d=levenshtein(a,b);
 
   return Math.max(
     0,
@@ -448,240 +451,195 @@ function aliasTerms(q){
   const n=norm(q);
   const out=new Set([n]);
 
-  for(
-    const [canonical,aliases]
-    of SEARCH_ALIASES
-  ){
-
+  for(const [canonical,aliases] of SEARCH_ALIASES){
     const all=[
       canonical,
       ...aliases
     ].map(norm);
 
-    if(
-      all.some(x=>
-        x===n||
-        x.includes(n)||
-        n.includes(x)
-      )
-    ){
+    const related=all.some(x=>
+      x===n||
+      x.includes(n)||
+      n.includes(x)
+    );
+
+    if(related){
       all.forEach(x=>out.add(x));
-      out.add(norm(canonical))
     }
   }
 
   return [...out]
 }
 
-function variants(q){
+function searchVariants(q){
   const n=norm(q);
   const out=new Set([n]);
 
-  aliasTerms(n)
-    .forEach(x=>out.add(x));
+  aliasTerms(n).forEach(x=>out.add(x));
 
   return [...out]
 }
 
 
-/*
-  AI-förslag.
-  Detta är fortfarande den lokala AI-fallbacken,
-  inte ett externt AI-API.
-*/
+/* ---------------------------------------------------------
+   Lokal AI-motor
+--------------------------------------------------------- */
 
 const AI_FOODS=[
   {
-    match:[
-      'kokt agg',
-      'kokt ägg',
-      'hardkokt agg',
-      'hardkokt ägg',
-      'hårdkokt ägg'
-    ],
+    match:['kokt ägg','kokt agg','hårdkokt ägg','hardkokt agg','ägg'],
     name:'Kokt ägg',
     kcal:155,
     protein:12.6,
     carbs:1.1,
     fat:10.6
   },
-
   {
-    match:[
-      'stekt agg',
-      'stekt ägg'
-    ],
+    match:['stekt ägg','stekt agg'],
     name:'Stekt ägg',
     kcal:196,
     protein:13.6,
-    carbs:0.8,
+    carbs:.8,
     fat:14.8
   },
-
   {
-    match:[
-      'kycklingfile',
-      'kycklingfilé',
-      'kycklingbrost',
-      'kycklingbröst'
-    ],
+    match:['kyckling','kycklingfilé','kycklingfile','kycklingbröst','kycklingbrost'],
     name:'Kycklingfilé, tillagad',
     kcal:165,
     protein:31,
     carbs:0,
     fat:3.6
   },
-
   {
-    match:[
-      'kokt ris',
-      'ris kokt',
-      'jasminris',
-      'basmatiris'
-    ],
+    match:['kokt ris','ris','jasminris','basmatiris'],
     name:'Kokt ris',
     kcal:130,
     protein:2.7,
     carbs:28.2,
-    fat:0.3
+    fat:.3
   },
-
   {
-    match:[
-      'kokt potatis',
-      'potatis kokt'
-    ],
+    match:['kokt potatis','potatis'],
     name:'Kokt potatis',
     kcal:87,
     protein:1.9,
     carbs:20.1,
-    fat:0.1
+    fat:.1
   },
-
   {
-    match:[
-      'havregrynsgröt',
-      'havregryns grot',
-      'havregrynsgröt med vatten'
-    ],
+    match:['havregryn','havregrynsgröt'],
     name:'Havregrynsgröt med vatten',
     kcal:68,
     protein:2.4,
     carbs:11.7,
     fat:1.4
   },
-
   {
-    match:[
-      'pannkaka',
-      'pannkakor'
-    ],
+    match:['pannkaka','pannkakor'],
     name:'Pannkaka, klassisk',
     kcal:190,
     protein:6.1,
     carbs:22.7,
     fat:8.7
   },
-
   {
-    match:[
-      'tacos',
-      'taco',
-      'tacofars',
-      'tacofärs'
-    ],
+    match:['tacos','taco','tacofärs','tacofars'],
     name:'Tacos med nötfärs, uppskattat',
     kcal:190,
     protein:12,
     carbs:12,
     fat:10
   },
-
   {
-    match:[
-      'kyckling ris',
-      'kyckling med ris'
-    ],
+    match:['kyckling med ris','kyckling ris'],
     name:'Kyckling med ris, uppskattat',
     kcal:150,
     protein:13,
     carbs:18,
     fat:3.5
+  },
+  {
+    match:['proteinshake','protein shake','protein dryck'],
+    name:'Proteinshake, uppskattat',
+    kcal:120,
+    protein:24,
+    carbs:4,
+    fat:2
+  },
+  {
+    match:['smörgås','macka','smorgas'],
+    name:'Smörgås, uppskattat',
+    kcal:220,
+    protein:8,
+    carbs:28,
+    fat:8
   }
 ];
 
-
 function aiCandidate(q){
-
   const n=norm(q);
 
-  if(!n)return null;
+  if(!n)
+    return null;
+
+  const qt=tokens(n);
 
   let best=null;
   let bestScore=0;
 
-  const qt=tokens(n);
+  for(const food of AI_FOODS){
 
-  for(
-    const f of AI_FOODS
-  ){
+    for(const phrase of food.match){
 
-    for(
-      const m of f.match
-    ){
+      const p=norm(phrase);
+      const pt=tokens(p);
 
-      const mn=norm(m);
-      const mt=tokens(mn);
-
-      let score=
-        similarity(n,mn)*100;
+      let score=similarity(n,p)*100;
 
       let matched=0;
 
-      for(
-        const token of qt
-      ){
+      for(const token of qt){
 
-        if(
-          mt.some(x=>
-            x===token||
-            x.startsWith(token)||
-            token.startsWith(x)||
-            similarity(token,x)>=0.72
-          )
-        ){
+        const bestTokenScore=
+          Math.max(
+            ...pt.map(x=>{
+              if(x===token)return 1;
+              if(x.startsWith(token)||token.startsWith(x))return .9;
+              return similarity(token,x)
+            })
+          );
+
+        if(bestTokenScore>=.72)
           matched++;
-        }
+
+        score+=bestTokenScore*25;
       }
 
-      if(qt.length){
-        score+=
-          matched/qt.length*100;
-      }
+      if(qt.length&&matched===qt.length)
+        score+=55;
 
-      if(
-        matched===qt.length &&
-        qt.length>1
-      ){
-        score+=80;
-      }
+      if(pt.length===qt.length)
+        score+=25;
 
       if(score>bestScore){
-
         bestScore=score;
-        best={
-          ...f
-        }
+        best=food;
       }
     }
   }
 
-  if(
-    !best||
-    bestScore<55
-  ){
+  if(!best)
     return null;
-  }
+
+  /*
+    AI får visas vid ganska breda sökningar,
+    men inte vid rena nonsens-sökningar.
+  */
+
+  if(
+    bestScore<80
+  )
+    return null;
 
   return {
     id:`ai:${norm(best.name).replace(/ /g,'-')}`,
@@ -696,112 +654,183 @@ function aiCandidate(q){
 }
 
 
+/* ---------------------------------------------------------
+   Databas-ranking
+--------------------------------------------------------- */
+
+function tokenScore(queryToken,nameTokens){
+
+  let best=0;
+
+  for(const n of nameTokens){
+
+    if(n===queryToken)
+      best=Math.max(best,1);
+
+    else if(
+      n.startsWith(queryToken)||
+      queryToken.startsWith(n)
+    )
+      best=Math.max(best,.92);
+
+    else
+      best=Math.max(
+        best,
+        similarity(queryToken,n)
+      );
+  }
+
+  return best
+}
+
 function searchScore(item,q){
 
+  const query=norm(q);
   const name=norm(item.name);
   const brand=norm(item.brand);
-  const query=norm(q);
 
   if(!query||!name)
-    return -999;
+    return -Infinity;
 
   const qt=tokens(query);
   const nt=tokens(name);
+  const bt=tokens(brand);
 
-  let s=0;
+  let score=0;
   let matched=0;
 
+  /* Exakt namn */
+
   if(name===query)
-    s+=5000;
+    score+=10000;
+
+  /* Namnet börjar med sökningen */
 
   if(name.startsWith(query))
-    s+=1700;
+    score+=4500;
+
+  /* Exakt fras någonstans */
 
   if(name.includes(` ${query}`))
-    s+=1300;
+    score+=3000;
 
   if(name.includes(query))
-    s+=700;
+    score+=1800;
+
+  /* Varumärke */
 
   if(brand===query)
-    s+=1200;
+    score+=2500;
 
   if(brand.includes(query))
-    s+=450;
+    score+=900;
 
-  for(
-    const t of qt
-  ){
+  /* Token ranking */
 
-    if(nt.includes(t)){
-      s+=900;
+  qt.forEach(token=>{
+
+    const ts=tokenScore(token,nt);
+
+    if(ts>=.72){
       matched++;
-      continue;
-    }
 
-    if(
-      nt.some(x=>x.startsWith(t))
-    ){
-      s+=520;
-      matched++;
-      continue;
+      score+=
+        ts>=.99
+          ?1800
+          :ts>=.9
+            ?1100
+            :500*ts;
     }
+  });
 
-    const near=
-      nt.map(x=>similarity(t,x))
-        .reduce((a,b)=>Math.max(a,b),0);
+  /*
+    Alla sökord bör finnas.
+    Detta är viktigt för exempelvis:
+    "kyckling ris"
+    så att "kyckling" ensam inte tar över.
+  */
 
-    if(
-      t.length>=3&&
-      near>=0.86
-    ){
-      s+=330*near;
-      matched++;
-      continue;
-    }
+  if(qt.length>1){
 
-    if(
-      t.length>=4&&
-      near>=0.72
-    ){
-      s+=120*near;
-      matched++;
-    }
+    if(matched===qt.length)
+      score+=2200;
+
+    else if(matched===qt.length-1)
+      score-=500;
+
+    else
+      score-=1800;
   }
 
-  if(qt.length>1&&matched===0)
-    return -999;
+  /* Position: första orden är viktigare */
 
-  if(qt.length>1&&matched<qt.length)
-    s-=300;
+  if(qt.length){
 
-  s-=Math.max(
-    0,
-    nt.length-qt.length
-  )*24;
+    const first=qt[0];
+    const pos=nt.indexOf(first);
+
+    if(pos===0)
+      score+=800;
+
+    else if(pos>0&&pos<3)
+      score+=250;
+  }
+
+  /* Kortare, renare namn prioriteras */
+
+  score-=
+    Math.max(
+      0,
+      nt.length-qt.length
+    )*35;
+
+  /* Undvik recept / maträtter vid enkel råvara */
 
   if(
-    /\b(hemgjord|hemlagad|recept|sås|sauce)\b/.test(name)&&
+    qt.length===1&&
+    /\b(hemgjord|hemlagad|recept|sås|sauce|gryta)\b/.test(name)&&
     !name.startsWith(query)
   ){
-    s-=80;
+    score-=700;
   }
+
+  /* Verified */
+
+  if(item.verified)
+    score+=120;
+
+  /* OFF-produkter med varumärke */
 
   if(
     item.source==='openfoodfacts'&&
     brand
   ){
-    s+=12;
+    score+=50;
   }
 
-  if(item.verified)
-    s+=40;
+  /*
+    Svag fuzzy-match ska inte få igenom helt fel saker.
+  */
 
-  return s
+  if(
+    matched===0
+  )
+    return -Infinity;
+
+  return score;
 }
 
 
+/* ---------------------------------------------------------
+   API
+--------------------------------------------------------- */
+
 async function fetchSearchEndpoint(path,variant){
+
+  const key=`${path}|${variant}`;
+
+  if(SEARCH_CACHE.has(key))
+    return SEARCH_CACHE.get(key);
 
   try{
 
@@ -814,15 +843,37 @@ async function fetchSearchEndpoint(path,variant){
 
     const data=await r.json();
 
-    return Array.isArray(data)
-      ?data
-      :[];
+    const result=
+      Array.isArray(data)
+        ?data
+        :[];
+
+    SEARCH_CACHE.set(
+      key,
+      result
+    );
+
+    /*
+      Begränsa cacheminnet så det inte växer
+      obegränsat under lång användning.
+    */
+
+    if(SEARCH_CACHE.size>150)
+      SEARCH_CACHE.delete(
+        SEARCH_CACHE.keys().next().value
+      );
+
+    return result;
 
   }catch{
     return []
   }
 }
 
+
+/* ---------------------------------------------------------
+   Huvudsökning
+--------------------------------------------------------- */
 
 async function searchAll(q=''){
 
@@ -837,7 +888,7 @@ async function searchAll(q=''){
 
     renderResults([]);
 
-    return
+    return;
   }
 
   const request=Symbol();
@@ -845,61 +896,102 @@ async function searchAll(q=''){
   searchAll._request=request;
 
   $('#searchHint').textContent=
-    'Söker i Livsmedelsverket + OFF…';
+    'Söker…';
 
   try{
 
-    const vs=variants(raw);
+    const vs=searchVariants(raw);
+
+    /*
+      Kör Livsmedelsverket + OFF parallellt
+      för alla relevanta varianter.
+    */
 
     const batches=
       await Promise.all(
         vs.map(v=>
           Promise.all([
-            fetchSearchEndpoint('/api/foods',v),
-            fetchSearchEndpoint('/api/products',v)
+            fetchSearchEndpoint(
+              '/api/foods',
+              v
+            ),
+            fetchSearchEndpoint(
+              '/api/products',
+              v
+            )
           ])
         )
       );
 
     if(
       searchAll._request!==request
-    ){
-      return
-    }
+    )
+      return;
 
-    let all=batches.flat(2);
+    const all=batches.flat(2);
+
+    /*
+      Deduplicering.
+    */
 
     const seen=new Set();
 
-    const ranked=
+    const unique=
       all
-        .filter(x=>x&&x.name)
+        .filter(x=>
+          x&&
+          x.name
+        )
         .filter(x=>{
 
-          const key=
-            `${x.source||''}|${x.id||''}|${norm(x.name)}|${norm(x.brand||'')}`;
+          const key=[
+            x.source||'',
+            x.id||'',
+            norm(x.name),
+            norm(x.brand||'')
+          ].join('|');
 
           if(seen.has(key))
             return false;
 
           seen.add(key);
 
-          return true
+          return true;
+        });
+
+
+    /*
+      Ranka mot ORIGINALSÖKNINGEN.
+      Alias används för hämtning men originalet
+      avgör vad som faktiskt är relevant.
+    */
+
+    const ranked=
+      unique
+        .map((x,i)=>{
+
+          const scores=vs.map(v=>
+            searchScore(x,v)
+          );
+
+          const originalScore=
+            searchScore(x,raw);
+
+          return {
+            ...x,
+            _score:
+              Math.max(
+                originalScore,
+                ...scores
+              ),
+            _originalScore:
+              originalScore,
+            _i:i
+          };
         })
-        .map((x,i)=>({
-
-          ...x,
-
-          _score:
-            Math.max(
-              ...vs.map(v=>
-                searchScore(x,v)
-              )
-            ),
-
-          _i:i
-        }))
-        .filter(x=>x._score>-999)
+        .filter(x=>
+          Number.isFinite(x._score)
+        )
         .sort((a,b)=>
           b._score-a._score||
           a._i-b._i
@@ -907,29 +999,44 @@ async function searchAll(q=''){
 
 
     /*
-      AI skapas oavsett om databasen
-      hittade resultat.
-
-      Endast en riktigt stark träff
-      blockerar AI-förslaget.
+      AI ska inte försvinna bara för att databasen
+      råkar returnera NÅGOT.
+      
+      Endast om databasen har en riktigt stark
+      träff använder vi databasen exklusivt.
     */
 
     const ai=aiCandidate(raw);
 
-    const databaseScore=
-      ranked.length
-        ?ranked[0]._score
-        :0;
+    const top=ranked[0];
 
-    const strongMatch=
-      databaseScore>=1800;
+    const strongDatabaseMatch=
+      top&&
+      (
+        top._originalScore>=
+        6500
+        ||
+        (
+          top._score>=9000&&
+          similarity(
+            norm(raw),
+            norm(top.name)
+          )>=.65
+        )
+      );
 
-    const final=[];
+    let final=[];
 
     if(
-      ai &&
-      !strongMatch
+      ai&&
+      !strongDatabaseMatch
     ){
+
+      /*
+        AI först eftersom det är ett smart
+        semantiskt förslag.
+      */
+
       final.push(ai);
     }
 
@@ -937,38 +1044,77 @@ async function searchAll(q=''){
       ...ranked
     );
 
-    renderResults(
-      final.slice(0,50)
-    );
+    /*
+      Om AI redan finns i databasen:
+      visa den inte två gånger.
+    */
+
+    const finalSeen=new Set();
+
+    final=final.filter(x=>{
+
+      const key=
+        `${x.source}|${norm(x.name)}`;
+
+      if(finalSeen.has(key))
+        return false;
+
+      finalSeen.add(key);
+
+      return true;
+    });
+
+
+    /*
+      Max 50 resultat.
+    */
+
+    final=
+      final.slice(0,50);
+
+    renderResults(final);
+
+
+    /* -----------------------------------------------------
+       Statusrad
+    ----------------------------------------------------- */
 
     if(!final.length){
 
       $('#searchHint').textContent=
-        'Inga relevanta resultat hittades.';
+        ai
+          ?'🧠 AI-förslag hittades inte heller.'
+          :'Inga relevanta resultat hittades.';
 
     }else if(
-      ai &&
-      !strongMatch
+      ai&&
+      !strongDatabaseMatch
     ){
 
       $('#searchHint').textContent=
-        '🧠 AI-förslag + databasresultat';
+        `🧠 AI-förslag · ${ranked.length} databasresultat`;
 
     }else{
 
       $('#searchHint').textContent=
-        'Bästa träffar från Livsmedelsverket + OFF';
+        `${ranked.length} relevanta träffar`;
     }
 
   }catch(e){
 
-    console.error(e);
+    console.error(
+      'Search error:',
+      e
+    );
 
     if(
       searchAll._request!==request
-    ){
-      return
-    }
+    )
+      return;
+
+    /*
+      Även om API:t dör ska AI fortfarande fungera.
+    */
 
     const ai=aiCandidate(raw);
 
@@ -979,7 +1125,7 @@ async function searchAll(q=''){
       ]);
 
       $('#searchHint').textContent=
-        '🧠 AI-förslag – inget säkert databassvar hittades.';
+        '🧠 AI-förslag – databasen kunde inte läsas.';
 
     }else{
 
@@ -1515,3 +1661,4 @@ $('#nextDay').onclick=
   ()=>shiftDay(1);
 
 loadDay();
+```
