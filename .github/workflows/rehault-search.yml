@@ -1,5 +1,5 @@
 name: Rehaul search engine
-on: push
+on: [push]
 permissions:
   contents: write
 jobs:
@@ -7,37 +7,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Add online AI search layer
+      - name: Patch app.js
         run: |
-          python3 - <<'PY'
+          cat > /tmp/patch.py <<'PY'
           from pathlib import Path
-          p = Path('public/app.js')
-          s = p.read_text(encoding='utf-8')
-          marker = "\n/* =========================================================\n   RESTEN AV APPEN — OFÖRÄNDRAD"
-          if 'ONLINE AI SEARCH LAYER V1' in s:
-              raise SystemExit('already patched')
-          code = r'''
+          p=Path('public/app.js')
+          s=p.read_text(encoding='utf-8')
+          if 'ONLINE AI SEARCH LAYER V2' in s:
+              print('already patched')
+              raise SystemExit(0)
+          s += r'''
 
 /* =========================================================
-   ONLINE AI SEARCH LAYER V1
-   Gratis nätbaserad AI först, databasen därefter.
+   ONLINE AI SEARCH LAYER V2
+   Gratis nät-AI först. Databasen och lokal AI finns kvar.
 ========================================================= */
-
 const onlineAiCache=new Map();
 let onlineAiAbort=null;
-let onlineAiSequence=0;
-
-function onlineAiJson(text){
+let onlineAiSeq=0;
+function onlineAiParse(text){
   const raw=String(text||'').trim();
-  const fenced=raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  const value=fenced?fenced[1]:raw;
-  const start=value.indexOf('{');
-  const end=value.lastIndexOf('}');
-  if(start<0||end<=start)return null;
-  try{return JSON.parse(value.slice(start,end+1))}catch{return null}
+  const m=raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const v=m?m[1]:raw;
+  const a=v.indexOf('{'),b=v.lastIndexOf('}');
+  if(a<0||b<=a)return null;
+  try{return JSON.parse(v.slice(a,b+1))}catch{return null}
 }
-
-function onlineAiFood(x){
+function onlineAiNormalize(x){
   if(!x||!x.name)return null;
   const kcal=Number(x.kcal),protein=Number(x.protein),carbs=Number(x.carbs),fat=Number(x.fat);
   if(!Number.isFinite(kcal)||kcal<0||kcal>1000)return null;
@@ -46,8 +42,7 @@ function onlineAiFood(x){
   if(!Number.isFinite(fat)||fat<0||fat>100)return null;
   return {id:`ai-online:${norm(x.name).replace(/ /g,'-')}`,source:'ai',aiProvider:'Vireonix',verified:0,name:String(x.name).slice(0,120),kcal,protein,carbs,fat,aiOnline:true};
 }
-
-async function getOnlineAiFood(query,seq){
+async function onlineAiFood(query,seq){
   const q=String(query||'').trim();
   if(q.length<2)return null;
   const key=norm(q);
@@ -56,29 +51,12 @@ async function getOnlineAiFood(query,seq){
   onlineAiAbort=new AbortController();
   const timer=setTimeout(()=>onlineAiAbort?.abort(),3000);
   try{
-    const prompt=[
-      'You are a food search assistant for a Swedish calorie tracker.',
-      'Identify the food or drink the user is searching for.',
-      'Give a realistic estimate of nutrition per 100 g for the most common interpretation.',
-      'If the query is a branded product, preserve the brand name when possible.',
-      'Return ONLY JSON: {"name":"...","kcal":0,"protein":0,"carbs":0,"fat":0}.',
-      'kcal is kcal per 100 g. protein, carbs and fat are grams per 100 g.',
-      'Never claim the values are verified database values.',
-      `Search query: ${q}`
-    ].join('\n');
-    const r=await fetch('https://vireonix.ai/v1/chat/completions',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      signal:onlineAiAbort.signal,
-      body:JSON.stringify({model:'auto',temperature:0.1,max_tokens:160,messages:[
-        {role:'system',content:'Return compact JSON only. No markdown.'},
-        {role:'user',content:prompt}
-      ]})
-    });
+    const prompt=`You are the nutrition search assistant in a Swedish calorie tracker. Identify the food or drink in this search and estimate nutrition per 100 g for the most common interpretation. If it is a branded product, keep the brand. Return ONLY JSON with exactly: name,kcal,protein,carbs,fat. kcal is kcal per 100 g; the others are grams per 100 g. Never claim verified database values. Search: ${q}`;
+    const r=await fetch('https://vireonix.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},signal:onlineAiAbort.signal,body:JSON.stringify({model:'auto',temperature:0.1,max_tokens:160,messages:[{role:'system',content:'Return compact JSON only. No markdown.'},{role:'user',content:prompt}]})});
     if(!r.ok)throw new Error(`AI ${r.status}`);
-    const data=await r.json();
-    if(seq!==onlineAiSequence)return null;
-    const food=onlineAiFood(onlineAiJson(data?.choices?.[0]?.message?.content||''));
+    const d=await r.json();
+    if(seq!==onlineAiSeq)return null;
+    const food=onlineAiNormalize(onlineAiParse(d?.choices?.[0]?.message?.content||''));
     if(food)onlineAiCache.set(key,food);
     return food;
   }catch(e){
@@ -86,39 +64,35 @@ async function getOnlineAiFood(query,seq){
     return null;
   }finally{clearTimeout(timer)}
 }
-
-const databaseSearchAll=searchAll;
+const databaseSearchAllV2=searchAll;
 searchAll=async function(q=''){
-  const seq=++onlineAiSequence;
-  if(String(q).trim().length<2){if(onlineAiAbort)onlineAiAbort.abort();return databaseSearchAll(q)}
+  const seq=++onlineAiSeq;
+  if(String(q).trim().length<2){if(onlineAiAbort)onlineAiAbort.abort();return databaseSearchAllV2(q)}
   $('#searchHint').textContent='🧠 Online AI + databaser…';
-  const aiPromise=getOnlineAiFood(q,seq);
-  const dbPromise=databaseSearchAll(q);
+  const aiPromise=onlineAiFood(q,seq);
+  const dbPromise=databaseSearchAllV2(q);
   let ai=null;
   try{ai=await aiPromise}catch{}
   try{await dbPromise}catch{}
-  if(seq!==onlineAiSequence)return;
-  if(!ai)return;
-
+  if(seq!==onlineAiSeq||!ai)return;
   const r=$('#results');
   if(!r)return;
-
-  const existing=[...r.querySelectorAll('.result')];
-  const aiButton=document.createElement('button');
-  aiButton.type='button';
-  aiButton.className='result online-ai-result';
-  aiButton.innerHTML=`<div class="result-top"><strong>${esc(ai.name)}</strong><span class="source-badge source-ai">AI</span></div><small>${fmt(ai.kcal)} kcal · ${fmt1(ai.protein)} g protein / 100 g · AI-estimat · online</small>`;
-  aiButton.onclick=()=>selectFood(ai);
-  r.prepend(aiButton);
-  $('#searchHint').textContent=`🧠 Online AI-förslag · ${existing.length} databasresultat`;
+  const old=[...r.querySelectorAll('.result')];
+  const b=document.createElement('button');
+  b.type='button';b.className='result online-ai-result';
+  b.innerHTML=`<div class="result-top"><strong>${esc(ai.name)}</strong><span class="source-badge source-ai">AI</span></div><small>${fmt(ai.kcal)} kcal · ${fmt1(ai.protein)} g protein / 100 g · AI-estimat · online</small>`;
+  b.onclick=()=>selectFood(ai);
+  r.prepend(b);
+  $('#searchHint').textContent=`🧠 Online AI-förslag · ${old.length} databasresultat`;
 };
 '''
-          p.write_text(s.replace(marker, code + marker), encoding='utf-8')
+          p.write_text(s,encoding='utf-8')
           PY
+          python3 /tmp/patch.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add public/app.js
-          git commit -m 'Add free online AI as first search result'
-          git rm .github/workflows/rehault-search.yml
-          git commit -m 'Remove temporary search workflow'
+          git commit -m 'Add free online AI as first food search result' || true
+          git rm .github/workflows/rehault-search.yml || true
+          git commit -m 'Remove temporary search workflow' || true
           git push
