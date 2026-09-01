@@ -1,17 +1,8 @@
-const foods = [
-  {id:'egg',name:'Ägg, kokt',kcal:143,protein:12.6,carbs:0.7,fat:9.5},
-  {id:'banana',name:'Banan, utan skal',kcal:89,protein:1.1,carbs:22.8,fat:0.3},
-  {id:'rice',name:'Ris, kokt',kcal:130,protein:2.7,carbs:28.2,fat:0.3},
-  {id:'rice-dry',name:'Ris, okokt',kcal:350,protein:7.1,carbs:78.9,fat:0.7},
-  {id:'chicken',name:'Kycklingfilé, rå',kcal:110,protein:23.1,carbs:0,fat:1.2},
-  {id:'oats',name:'Havregryn',kcal:360,protein:13.3,carbs:57.0,fat:6.5},
-  {id:'potato',name:'Potatis, kokt',kcal:80,protein:1.8,carbs:17.0,fat:0.1}
-];
-
 let log = JSON.parse(localStorage.getItem('kalorier-log') || '[]');
 let selected = null;
 const $ = s => document.querySelector(s);
 const dialog = $('#foodDialog');
+let searchTimer = null;
 
 function fmt(n){return new Intl.NumberFormat('sv-SE',{maximumFractionDigits:0}).format(Math.round(n));}
 function render(){
@@ -25,14 +16,62 @@ function render(){
 }
 window.removeFood=i=>{log.splice(i,1);save();};
 function save(){localStorage.setItem('kalorier-log',JSON.stringify(log));render();}
-function showResults(q=''){
-  const matches=foods.filter(f=>f.name.toLowerCase().includes(q.toLowerCase())).slice(0,8);
-  $('#results').innerHTML=matches.map(f=>`<button type="button" class="result" data-id="${f.id}"><strong>${f.name}</strong><small>${f.kcal} kcal · ${f.protein} g protein / 100 g</small></button>`).join('');
-  document.querySelectorAll('.result').forEach(b=>b.onclick=()=>selectFood(b.dataset.id));
+
+async function searchFoods(q=''){
+  const results = $('#results');
+  results.innerHTML = '<div class="empty">Söker…</div>';
+  try {
+    const response = await fetch(`/api/foods?q=${encodeURIComponent(q)}`);
+    if (!response.ok) throw new Error('API-fel');
+    const matches = await response.json();
+    results.innerHTML = matches.length
+      ? matches.map(f=>`<button type="button" class="result" data-id="${f.id}"><strong>${escapeHtml(f.name)}</strong><small>${fmt(f.kcal)} kcal · ${f.protein ?? 0} g protein / 100 g</small></button>`).join('')
+      : '<div class="empty">Inga livsmedel hittades.</div>';
+    results.querySelectorAll('.result').forEach(b=>b.onclick=()=>selectFood(matches.find(f=>String(f.id)===b.dataset.id)));
+  } catch (error) {
+    results.innerHTML = '<div class="empty">Kunde inte läsa matdatabasen.</div>';
+    console.error(error);
+  }
 }
-function selectFood(id){selected=foods.find(f=>f.id===id);$('#amountArea').hidden=false;$('#selectedFood').innerHTML=`<strong>${selected.name}</strong><small>${selected.kcal} kcal per 100 g</small>`;$('#amount').focus();$('#amount').select();}
-$('#addFood').onclick=()=>{dialog.showModal();$('#foodSearch').value='';$('#amountArea').hidden=true;showResults();};
-$('#foodSearch').oninput=e=>showResults(e.target.value);
-$('#foodForm').onsubmit=e=>{if(!selected)return;e.preventDefault();const amount=Number($('#amount').value)||0;const factor=amount/100;log.push({name:selected.name,amount,kcal:selected.kcal*factor,protein:selected.protein*factor,carbs:selected.carbs*factor,fat:selected.fat*factor});save();dialog.close();selected=null;};
-document.querySelectorAll('.quick button').forEach(b=>b.onclick=()=>{const text=b.textContent.replace(/^[^ ]+ /,'');const f=foods.find(x=>x.name.toLowerCase().startsWith(text.toLowerCase()));if(f){dialog.showModal();selectFood(f.id);}});
+
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>\'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+
+function selectFood(food){
+  if(!food) return;
+  selected=food;
+  $('#amountArea').hidden=false;
+  $('#selectedFood').innerHTML=`<strong>${escapeHtml(selected.name)}</strong><small>${fmt(selected.kcal)} kcal per 100 g</small>`;
+  $('#amount').focus();
+  $('#amount').select();
+}
+
+$('#addFood').onclick=()=>{dialog.showModal();$('#foodSearch').value='';$('#amountArea').hidden=true;selected=null;searchFoods();};
+$('#foodSearch').oninput=e=>{
+  clearTimeout(searchTimer);
+  searchTimer=setTimeout(()=>searchFoods(e.target.value.trim()),150);
+};
+
+$('#foodForm').onsubmit=e=>{
+  if(!selected)return;
+  e.preventDefault();
+  const amount=Number($('#amount').value)||0;
+  if(amount<=0)return;
+  const factor=amount/100;
+  log.push({name:selected.name,amount,kcal:(selected.kcal||0)*factor,protein:(selected.protein||0)*factor,carbs:(selected.carbs||0)*factor,fat:(selected.fat||0)*factor});
+  save();
+  dialog.close();
+  selected=null;
+};
+
+document.querySelectorAll('.quick button').forEach(b=>b.onclick=async()=>{
+  const text=b.textContent.replace(/^[^ ]+ /,'').trim();
+  dialog.showModal();
+  $('#foodSearch').value=text;
+  $('#amountArea').hidden=true;
+  selected=null;
+  await searchFoods(text);
+});
+
 render();
