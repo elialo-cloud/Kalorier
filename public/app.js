@@ -1662,3 +1662,43 @@ $('#nextDay').onclick=
 
 loadDay();
 ```
+
+/* =========================================================
+   ONLINE AI V4 — gratis nät-AI som första sökträff
+============================================================ */
+let onlineAiBusy=null,onlineAiSeq=0;
+function onlineAiParse(t){
+  const x=String(t||'').match(/\{[\s\S]*\}/);
+  if(!x)return null;
+  try{return JSON.parse(x[0])}catch{return null}
+}
+async function onlineAi(q,seq){
+  const prompt=`Identify the food/drink in this Swedish search and estimate nutrition per 100 g. Return ONLY JSON: {"name":"","kcal":0,"protein":0,"carbs":0,"fat":0}. Never claim verified database values. Search: ${q}`;
+  try{
+    const r=await fetch('https://vireonix.ai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'auto',temperature:.1,max_tokens:120,messages:[{role:'system',content:'JSON only.'},{role:'user',content:prompt}]})});
+    if(!r.ok||seq!==onlineAiSeq)return null;
+    const x=onlineAiParse((await r.json())?.choices?.[0]?.message?.content);
+    if(!x?.name)return null;
+    const kcal=+x.kcal,protein=+x.protein,carbs=+x.carbs,fat=+x.fat;
+    if(![kcal,protein,carbs,fat].every(Number.isFinite)||kcal<0||kcal>1000||protein<0||protein>100||carbs<0||carbs>100||fat<0||fat>100)return null;
+    return {id:`ai-online:${norm(x.name)}`,source:'ai',name:String(x.name).slice(0,100),kcal,protein,carbs,fat,verified:0};
+  }catch{return null}
+}
+const databaseSearchAllV4=searchAll;
+searchAll=async function(q=''){
+  const seq=++onlineAiSeq;
+  if(String(q).trim().length<2)return databaseSearchAllV4(q);
+  $('#searchHint').textContent='🧠 Online AI + databaser…';
+  const aiPromise=onlineAi(q,seq);
+  await databaseSearchAllV4(q);
+  const ai=await aiPromise;
+  if(!ai||seq!==onlineAiSeq)return;
+  const r=$('#results');
+  if(!r)return;
+  const b=document.createElement('button');
+  b.type='button';b.className='result online-ai-result';
+  b.innerHTML=`<div class="result-top"><strong>${esc(ai.name)}</strong><span class="source-badge source-ai">AI</span></div><small>${fmt(ai.kcal)} kcal · ${fmt1(ai.protein)} g protein / 100 g · AI-estimat · online</small>`;
+  b.onclick=()=>selectFood(ai);
+  r.prepend(b);
+  $('#searchHint').textContent='🧠 Online AI-förslag · databasresultat under';
+};
